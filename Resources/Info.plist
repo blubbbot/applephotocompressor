@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleExecutable</key><string>PhotoCompressor</string>
+    <key>CFBundleIdentifier</key><string>dev.local.PhotoCompressor</string>
+    <key>CFBundleName</key><string>Photo Compressor</string>
+    <key>CFBundleDisplayName</key><string>Photo Compressor</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>AppIcon.icns</string>
+    <key>CFBundleShortVersionString</key><string>0.1.4</string>
+    <key>CFBundleVersion</key><string>5</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSPhotoLibraryUsageDescription</key><string>Browse and preview videos, add smaller copies, and delete only originals that you choose to replace.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Show selected videos in Photos, read file sizes, and preserve titles, captions, and keywords when replacing videos.</string>
+</dict></plist>

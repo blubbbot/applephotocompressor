@@ -1,0 +1,596 @@
+import SwiftUI
+import AVKit
+import CompressionCore
+
+private let accent = Color(red: 0.10, green: 0.43, blue: 0.34)
+private let surface = Color(nsColor: .controlBackgroundColor)
+
+struct ContentView: View {
+    @EnvironmentObject private var model: AppModel
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if model.videos.isEmpty && !model.isLoading {
+                if model.connected { emptyLibrary } else { welcome }
+            }
+            else {
+                HStack(spacing: 0) {
+                    library.frame(width: 340).frame(maxHeight: .infinity)
+                    Divider()
+                    detail.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                    Divider()
+                    settings.frame(width: 300).frame(maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            Divider()
+            footer
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .tint(accent)
+        .sheet(isPresented: $model.showHistory) { HistoryView().environmentObject(model) }
+        .alert(item: $model.notice) { notice in Alert(title: Text("Photo Compressor"), message: Text(notice.text), dismissButton: .default(Text("OK"))) }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            if let icon = NSImage(named: "AppIcon") {
+                Image(nsImage: icon).resizable().frame(width: 36, height: 36)
+            } else {
+                Image(systemName: "rectangle.stack.badge.minus").font(.system(size: 25, weight: .medium)).foregroundStyle(accent)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Photo Compressor").font(.system(size: 17, weight: .semibold))
+                Text(model.demo ? "Sample library · example estimates" : model.connected ? "Apple Photos · compression stays on your Mac" : "Smaller videos. More room in iCloud.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if model.indexingSizes { ProgressView().controlSize(.small); Text("Reading file sizes…").font(.caption).foregroundStyle(.secondary) }
+            if !model.pending.isEmpty {
+                Button { model.showHistory = true } label: { Label("\(model.pending.count) ready to delete", systemImage: "checkmark.circle") }
+            }
+            Button { model.showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
+            Menu {
+                Button("Connect Photos Library…") { model.connect() }
+                Button("Open Video Files…") { model.openFiles() }
+                Button("Explore Sample Library") { model.loadDemo() }
+            } label: { Label(model.connected ? "Refresh library" : "Open library", systemImage: model.connected ? "arrow.clockwise" : "photo.on.rectangle") }
+            .fixedSize()
+            .disabled(model.isBusy || model.isLoading || model.indexingSizes)
+        }
+        .padding(.horizontal, 24).padding(.vertical, 16)
+    }
+
+    private var welcome: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: "photo.stack").font(.system(size: 58, weight: .ultraLight)).foregroundStyle(accent)
+            Text("Keep the moments. Make some room.").font(.system(size: 30, weight: .semibold, design: .rounded))
+            Text("Find large videos, preview the difference, and replace them with smaller copies.\nYou choose the quality. Originals are archived before deletion.")
+                .font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(5)
+            HStack(spacing: 12) {
+                Button("Connect Photos Library") { model.connect() }.buttonStyle(.borderedProminent).controlSize(.large)
+                Button("Open Video Files…") { model.openFiles() }.controlSize(.large)
+            }
+            Button("Explore a sample library") { model.loadDemo() }.buttonStyle(.link).padding(.top, 4)
+            HStack(spacing: 32) {
+                Label("Local processing", systemImage: "lock.shield")
+                Label("Capture dates & albums", systemImage: "calendar")
+                Label("Recoverable local archive", systemImage: "externaldrive")
+            }.font(.caption).foregroundStyle(.secondary).padding(.top, 24)
+            Spacer()
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyLibrary: some View {
+        ContentUnavailableView {
+            Label("No videos in this Photos library", systemImage: "film.stack")
+        } description: {
+            Text("Your Photos library is connected. Import a video in Photos, then refresh to begin.")
+        } actions: {
+            Button("Refresh library") { model.connect() }
+                .disabled(model.isBusy || model.isLoading || model.indexingSizes)
+            Button("Open Video Files…") { model.openFiles() }.disabled(model.isBusy)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var library: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Your videos").font(.title3.weight(.semibold))
+                    Text("\(model.visible.count)").font(.caption.monospacedDigit()).padding(.horizontal, 7).padding(.vertical, 3).background(.quaternary, in: Capsule())
+                    Spacer()
+                    Menu {
+                        Picker("Sort", selection: $model.sort) { ForEach(VideoSort.allCases) { Text($0.rawValue).tag($0) } }
+                        Divider()
+                        Picker("Minimum original size", selection: $model.minimumSize) {
+                            Text("Any size").tag(Int64(0)); Text("Over 100 MB").tag(Int64(100_000_000)); Text("Over 500 MB").tag(Int64(500_000_000)); Text("Over 1 GB").tag(Int64(1_000_000_000))
+                        }
+                        Toggle("Hide unsupported videos", isOn: $model.hideUnsupported)
+                        Toggle("Hide processed videos", isOn: $model.hideProcessed)
+                    } label: { Image(systemName: "line.3.horizontal.decrease") }
+                    .menuStyle(.borderlessButton).frame(width: 25)
+                }
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search videos", text: $model.search).textFieldStyle(.plain)
+                }.padding(9).background(surface, in: RoundedRectangle(cornerRadius: 8))
+                HStack {
+                    Button("Select recommended") { model.selectRecommended() }.buttonStyle(.link)
+                    Spacer()
+                    Menu("Select") {
+                        Button("All visible") { model.selected.formUnion(model.visible.filter { $0.unsupportedReason == nil }.map(\.id)) }
+                        Button("None") { model.selected.removeAll() }
+                    }.menuStyle(.borderlessButton).fixedSize()
+                }.font(.caption).disabled(model.isBusy)
+            }.padding(18)
+            Divider()
+            if model.isLoading {
+                VStack(spacing: 12) { ProgressView(); Text(model.activity).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.visible.isEmpty {
+                VStack(spacing: 14) {
+                    Image(systemName: "film").font(.system(size: 38)).foregroundStyle(.secondary)
+                    Text("No matching videos").font(.title2.weight(.semibold))
+                    Text("Change the filters or show processed videos.")
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(model.visible) { video in VideoRow(video: video).environmentObject(model) }
+                    }.padding(8)
+                }
+            }
+        }.background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+    }
+
+    private var detail: some View {
+        ScrollView {
+            if let video = model.focused {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        Text("Preview").font(.headline)
+                        Spacer()
+                        if let id = model.photosID(for: video, compressed: model.previewCompressed) {
+                            Button { model.showInPhotos(id: id) } label: { Label("Show in Photos", systemImage: "photo.on.rectangle") }
+                                .buttonStyle(.borderless).help("Reveal this video in the Photos app")
+                        }
+                        if model.output(for: video.id) != nil {
+                            Picker("Version", selection: $model.previewCompressed) { Text("Original").tag(false); Text("Compressed").tag(true) }
+                                .pickerStyle(.segmented).frame(width: 210).onChange(of: model.previewCompressed) { model.loadPreview() }
+                        }
+                    }
+                    Label(compressionImpact(video).summary, systemImage: "slider.horizontal.3")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14).fill(Color.black)
+                        if let player = model.player { NativeVideoPlayer(player: player).clipShape(RoundedRectangle(cornerRadius: 14)) }
+                        else if model.previewLoading { VStack(spacing: 12) { ProgressView().tint(.white); Text("Loading from Photos…").font(.caption).foregroundStyle(.white.opacity(0.8)) } }
+                        else if video.isDemo {
+                            SampleArtwork(seed: abs(video.id.hashValue % 6)).clipShape(RoundedRectangle(cornerRadius: 14))
+                            VStack { Spacer(); Label("Sample artwork · connect your library for playback", systemImage: "play.rectangle").font(.caption).padding(10).background(.ultraThinMaterial, in: Capsule()).padding(18) }
+                        } else {
+                            VStack(spacing: 12) {
+                                Image(systemName: "play.slash").font(.largeTitle)
+                                Text(model.previewError ?? "Select a video to load its preview.").font(.caption).multilineTextAlignment(.center)
+                                Button("Retry preview") { model.loadPreview() }
+                            }.foregroundStyle(.white.opacity(0.8)).padding(24)
+                        }
+                    }.aspectRatio(16 / 10, contentMode: .fit)
+                    if let player = model.player { PlaybackControls(player: player).id(ObjectIdentifier(player)) }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(video.name).font(.system(size: 21, weight: .semibold)).textSelection(.enabled)
+                        HStack(spacing: 8) {
+                            Text(video.date.formatted(date: .abbreviated, time: .omitted))
+                            Text("·"); Text(DisplayFormat.duration(video.facts.duration))
+                            Text("·"); Text("\(video.facts.width) × \(video.facts.height)")
+                            if video.facts.isHDR { Text("HDR").font(.caption2.weight(.semibold)).padding(.horizontal, 5).padding(.vertical, 2).background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 4)) }
+                        }.font(.caption).foregroundStyle(.secondary)
+                    }
+                    estimateCard(video)
+                    compressionImpact(video)
+                    if let reason = video.unsupportedReason {
+                        Label(reason, systemImage: "info.circle").font(.callout).foregroundStyle(.orange)
+                    }
+                    VStack(alignment: .leading, spacing: 9) {
+                        Label("Dates, location, favorites, albums, titles & captions", systemImage: "checkmark.shield").foregroundStyle(accent)
+                        Text("Library fields are restored and checked before an original can be deleted. People tags and editable history do not transfer.").foregroundStyle(.secondary)
+                    }.font(.caption).lineSpacing(3)
+                    if let status = model.statuses[video.id] {
+                        Label(status.text, systemImage: status.failed ? "exclamationmark.circle" : "checkmark.circle").font(.callout).foregroundStyle(status.failed ? .orange : accent)
+                    }
+                    if model.pending.contains(where: { $0.sourceID == video.id }) {
+                        Button { model.deleteOriginal(for: video.id) } label: {
+                            Label("Delete this original from Photos…", systemImage: "trash").frame(maxWidth: .infinity).padding(.vertical, 5)
+                        }.buttonStyle(.bordered).disabled(model.isBusy || !model.connected)
+                        Text("The verified smaller copy and local original archive are kept. macOS asks you to confirm.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button { model.toggle(video) } label: {
+                        Label(model.selected.contains(video.id) ? "Selected for compression" : "Select for compression", systemImage: model.selected.contains(video.id) ? "checkmark.circle.fill" : "plus.circle")
+                            .frame(maxWidth: .infinity).padding(.vertical, 5)
+                    }.buttonStyle(.bordered).disabled(model.isBusy || video.unsupportedReason != nil)
+                }.padding(24)
+                    .contextMenu { VideoContextMenu(video: video).environmentObject(model) }
+            } else {
+                VStack(spacing: 16) {
+                    Image(systemName: "play.rectangle").font(.system(size: 46, weight: .ultraLight)).foregroundStyle(accent)
+                    Text("Take a closer look").font(.title2.weight(.medium))
+                    Text("Select a video to preview it and see its estimated savings.").foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }.padding(40).frame(maxWidth: .infinity, minHeight: 480)
+            }
+        }.background(surface.opacity(0.6))
+    }
+
+    private func reviewedVideo(_ video: LibraryVideo) -> LibraryVideo {
+        guard let facts = model.outputRecord(for: video.id)?.sourceFacts else { return video }
+        var reviewed = video
+        reviewed.facts = facts; reviewed.factsAreMeasured = true
+        return reviewed
+    }
+
+    private func compressionImpact(_ video: LibraryVideo) -> CompressionImpactView {
+        let record = model.outputRecord(for: video.id)
+        return CompressionImpactView(video: reviewedVideo(video), settings: record?.settings ?? model.settings,
+            reviewingFinishedCopy: record != nil)
+    }
+
+    private func estimateCard(_ video: LibraryVideo) -> some View {
+        let record = model.outputRecord(for: video.id)
+        let reviewed = reviewedVideo(video)
+        let plan = CompressionPlan(facts: reviewed.facts, settings: record?.settings ?? model.settings)
+        let originalBytes = record?.originalBytes ?? video.facts.bytes
+        let actualBytes = record?.outputBytes
+        let copyBytes = actualBytes ?? plan.estimatedBytes
+        return VStack(spacing: 16) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) { Text("ORIGINAL").font(.caption2.weight(.semibold)).foregroundStyle(.secondary); Text(originalBytes.map(DisplayFormat.bytes) ?? "Size pending").font(.system(size: 23, weight: .medium, design: .rounded)) }
+                Spacer()
+                Image(systemName: "arrow.right").foregroundStyle(.tertiary).padding(.top, 22)
+                Spacer()
+                VStack(alignment: .trailing, spacing: 6) { Text(actualBytes == nil ? "ESTIMATED COPY" : "FINISHED COPY").font(.caption2.weight(.semibold)).foregroundStyle(.secondary); Text((actualBytes == nil ? "~" : "") + DisplayFormat.bytes(copyBytes)).font(.system(size: 23, weight: .medium, design: .rounded)).foregroundStyle(accent) }
+            }
+            Divider()
+            HStack {
+                Text("\(plan.width) × \(plan.height) · up to \(plan.frameRate, specifier: "%.0f") fps · HEVC").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if let original = originalBytes, original > 0 {
+                    let change = Double(original - copyBytes) / Double(original) * 100
+                    Text((actualBytes == nil ? "~" : "") + String(format: "%.0f", abs(change)) + (change >= 0 ? "% smaller" : "% larger"))
+                        .font(.caption.weight(.semibold)).foregroundStyle(change >= 0 ? accent : .orange)
+                }
+            }
+            if actualBytes != nil {
+                Text("Measured file size and saved encoding settings. Controls on the right apply to your next compression.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(18).background(accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(accent.opacity(0.13)))
+    }
+
+    private var settings: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 21) {
+                VStack(alignment: .leading, spacing: 5) { Text("Compression").font(.title3.weight(.semibold)); Text("Your settings, for every selected video.").font(.caption).foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 14) {
+                    settingLabel("Maximum resolution", symbol: "arrow.down.right.and.arrow.up.left")
+                    Picker("Resolution", selection: $model.settings.resolution) { ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
+                    settingLabel("Maximum frame rate", symbol: "film")
+                    Picker("Frame rate", selection: $model.settings.frameRate) { ForEach(FrameRate.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
+                    Text("Smaller sources keep their resolution and frame rate.").font(.caption2).foregroundStyle(.secondary)
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 12) {
+                    settingLabel("Picture quality", symbol: "slider.horizontal.3")
+                    Picker("Quality", selection: $model.settings.quality) { ForEach(Quality.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().disabled(model.settings.useCustomBitrate)
+                    Text(model.settings.pictureQualityExplanation).font(.caption2).foregroundStyle(.secondary)
+                    Text("HEVC encoding is lossy, including with Original resolution and frame rate.").font(.caption2).foregroundStyle(.secondary)
+                    Toggle("Set video bitrate manually", isOn: $model.settings.useCustomBitrate).font(.caption)
+                    if model.settings.useCustomBitrate {
+                        HStack { Slider(value: $model.settings.bitrateMbps, in: 0.5...30, step: 0.5); Text("\(model.settings.bitrateMbps, specifier: "%.1f") Mbps").font(.caption.monospacedDigit()).frame(width: 65) }
+                    }
+                    HStack { Text("Minimum actual savings").font(.caption); Spacer(); Text("\(Int(model.settings.minimumSavings * 100))%").font(.caption.monospacedDigit()) }
+                    Slider(value: $model.settings.minimumSavings, in: 0.05...0.7, step: 0.05)
+                    Text("Skip a replacement if the finished file saves less than this.").font(.caption2).foregroundStyle(.secondary)
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 12) {
+                    settingLabel("After compression", symbol: "checkmark.circle")
+                    Toggle("Replace originals in Photos", isOn: $model.replaceOriginals).toggleStyle(.switch).font(.callout).disabled(!model.connected && !model.demo)
+                    Text(model.replaceOriginals && (model.connected || model.demo) ? "Validated copies are imported first. macOS then asks once to delete the successfully replaced originals." : "Keep the originals. Photos videos get a smaller imported copy; local files get a smaller file in the archive.")
+                        .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 12) {
+                    settingLabel("Original archive", symbol: "externaldrive")
+                    Text("Full originals and compressed files stay here, independently of iCloud.").font(.caption).foregroundStyle(.secondary)
+                    HStack(alignment: .top) {
+                        Image(systemName: "folder").foregroundStyle(accent)
+                        Text(model.backupDirectory.path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")).font(.caption).lineLimit(3).truncationMode(.middle).textSelection(.enabled)
+                    }.padding(11).frame(maxWidth: .infinity, alignment: .leading).background(surface, in: RoundedRectangle(cornerRadius: 8))
+                    HStack { Button("Choose folder…") { model.chooseArchive() }; Spacer(); Button { NSWorkspace.shared.open(model.backupDirectory) } label: { Image(systemName: "arrow.up.forward.square") }.help("Open archive in Finder") }
+                    Text("An external disk works well for a large library. Downloads and backups need free disk space.").font(.caption2).foregroundStyle(.secondary)
+                }
+            }.padding(20).disabled(model.isBusy)
+        }
+    }
+
+    private func settingLabel(_ title: String, symbol: String) -> some View { Label(title, systemImage: symbol).font(.callout.weight(.medium)) }
+
+    private var footer: some View {
+        VStack(spacing: 10) {
+            if model.isBusy { ProgressView(value: model.overallProgress).tint(accent) }
+            HStack(spacing: 22) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.isBusy ? model.activity : "\(model.selected.count) videos selected").font(.callout.weight(.semibold)).lineLimit(1)
+                    Text(model.isBusy ? "Originals stay archived. Stopping never deletes an unfinished original." : model.unknownSelectedSizes > 0 ? "\(model.unknownSelectedSizes) original sizes pending · measured during download" : "\(DisplayFormat.bytes(model.selectedOriginalBytes)) → ~\(DisplayFormat.bytes(model.selectedEstimatedBytes)) estimated")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                if !model.selected.isEmpty && !model.isBusy {
+                    VStack(alignment: .trailing, spacing: 3) { Text("~" + DisplayFormat.bytes(model.selectedSavings)).font(.system(size: 24, weight: .semibold, design: .rounded)).foregroundStyle(accent); Text(model.connected || model.demo ? "potential iCloud savings" : "estimated file savings").font(.caption2).foregroundStyle(.secondary) }
+                }
+                if model.isBusy { Button("Stop safely") { model.stop() }.controlSize(.large) }
+                else {
+                    Button {
+                        if model.demo { model.connect() } else { model.startBatch() }
+                    } label: {
+                        Label(model.demo ? "Connect Photos to begin" : model.connected && model.replaceOriginals ? "Compress & replace \(model.selected.count)" : "Compress \(model.selected.count) copies", systemImage: "arrow.down.right.and.arrow.up.left")
+                            .padding(.horizontal, 9).padding(.vertical, 6)
+                    }.buttonStyle(.borderedProminent).controlSize(.large)
+                        .disabled((model.selected.isEmpty && !model.demo) || model.isLoading || model.indexingSizes || model.journal == nil)
+                }
+            }
+        }.padding(.horizontal, 24).padding(.vertical, 16).background(surface)
+    }
+}
+
+// AVKit's SwiftUI VideoPlayer overlay aborts during generic superclass metadata
+// initialization on the tested macOS 15 runtime with the current SDK. The native
+// macOS view provides the same playback controls without that overlay.
+private struct NativeVideoPlayer: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .none
+        view.videoGravity = .resizeAspect
+        view.showsFullScreenToggleButton = true
+        view.setAccessibilityIdentifier("native-video-player")
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player?.pause()
+        view.player = nil
+    }
+}
+
+// Keep transport controls in the layout: AVPlayerView's overlay was not
+// consistently visible for PhotoKit preview items on the tested macOS runtime.
+private struct PlaybackControls: View {
+    let player: AVPlayer
+    @State private var elapsed = 0.0
+    @State private var duration = 0.0
+    @State private var playing = false
+    @State private var seeking = false
+    @State private var muted = false
+    private let ticker = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                if player.rate > 0 { player.pause() }
+                else {
+                    if duration > 0 && elapsed >= duration - 0.05 { player.seek(to: .zero) }
+                    player.play()
+                }
+                synchronize()
+            } label: { Image(systemName: playing ? "pause.fill" : "play.fill").frame(width: 18) }
+            .accessibilityLabel(playing ? "Pause preview" : "Play preview")
+            .help(playing ? "Pause preview" : "Play preview")
+            Text(DisplayFormat.duration(elapsed)).monospacedDigit().frame(minWidth: 34)
+            Slider(value: $elapsed, in: 0...max(duration, 0.01), onEditingChanged: { editing in
+                seeking = editing
+                if !editing { player.seek(to: CMTime(seconds: elapsed, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) }
+            })
+            .accessibilityLabel("Preview position")
+            .disabled(duration <= 0)
+            Text(DisplayFormat.duration(duration)).monospacedDigit().frame(minWidth: 34)
+            Button {
+                player.isMuted.toggle(); muted = player.isMuted
+            } label: { Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill").frame(width: 18) }
+            .accessibilityLabel(muted ? "Unmute preview" : "Mute preview")
+        }
+        .font(.caption)
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 4)
+        .onAppear { synchronize(); muted = player.isMuted }
+        .onReceive(ticker) { _ in synchronize() }
+    }
+
+    private func synchronize() {
+        let seconds = player.currentItem?.duration.seconds ?? 0
+        duration = seconds.isFinite && seconds > 0 ? seconds : 0
+        if !seeking {
+            let current = player.currentTime().seconds
+            elapsed = current.isFinite ? min(max(current, 0), duration) : 0
+        }
+        playing = player.rate > 0
+    }
+}
+
+private struct VideoRow: View {
+    @EnvironmentObject var model: AppModel
+    let video: LibraryVideo
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { model.toggle(video) } label: {
+                Image(systemName: model.selected.contains(video.id) ? "checkmark.square.fill" : "square").font(.system(size: 18)).foregroundStyle(model.selected.contains(video.id) ? accent : Color.secondary.opacity(0.5))
+            }.buttonStyle(.plain).disabled(model.isBusy || video.unsupportedReason != nil).accessibilityLabel("Select \(video.name)")
+            Button { model.focus(video) } label: {
+              HStack(spacing: 10) {
+                VideoThumbnail(video: video).frame(width: 84, height: 65).clipped().clipShape(RoundedRectangle(cornerRadius: 7))
+                VStack(alignment: .leading, spacing: 5) {
+                Text(video.name).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                Text("\(video.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending") · \(DisplayFormat.duration(video.facts.duration))\(video.facts.isHDR ? " · HDR" : "")").font(.caption2).foregroundStyle(.secondary)
+                if let status = model.statuses[video.id] {
+                    Text(status.text).font(.caption2).foregroundStyle(status.failed ? Color.orange : accent).lineLimit(1)
+                    if let fraction = status.fraction { ProgressView(value: fraction).controlSize(.mini) }
+                } else if video.unsupportedReason != nil {
+                    Text("Original retained · special video").font(.caption2).foregroundStyle(.orange)
+                } else if let savings = model.plan(video).estimatedSavings {
+                    Text("Save ~\(DisplayFormat.bytes(savings))").font(.caption2.weight(.medium)).foregroundStyle(accent)
+                } else { Text("~\(DisplayFormat.bytes(model.plan(video).estimatedBytes)) output").font(.caption2).foregroundStyle(accent) }
+                }
+                Spacer(minLength: 0)
+              }.contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel("Preview \(video.name)")
+        }
+        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(model.focusedID == video.id ? accent.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 9))
+        .accessibilityElement(children: .contain)
+        .contextMenu { VideoContextMenu(video: video).environmentObject(model) }
+    }
+}
+
+private struct VideoContextMenu: View {
+    @EnvironmentObject var model: AppModel
+    let video: LibraryVideo
+
+    var body: some View {
+        if let id = model.photosID(for: video) {
+            Button { model.showInPhotos(id: id) } label: { Label("Show in Photos", systemImage: "photo.on.rectangle") }
+        }
+        if let copyID = model.photosID(for: video, compressed: true), copyID != model.photosID(for: video) {
+            Button("Show compressed copy in Photos") { model.showInPhotos(id: copyID) }
+        }
+        if let url = video.fileURL {
+            Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: { Label("Show in Finder", systemImage: "folder") }
+        }
+        Divider()
+        Button("Preview video") { model.focus(video) }
+        Button(model.selected.contains(video.id) ? "Deselect for compression" : "Select for compression") { model.toggle(video) }
+            .disabled(model.isBusy || video.unsupportedReason != nil)
+    }
+}
+
+private struct VideoThumbnail: View {
+    let video: LibraryVideo
+    @State private var image: NSImage?
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if let image { Image(nsImage: image).resizable().scaledToFill() }
+            else if video.isDemo { SampleArtwork(seed: abs(video.id.hashValue % 6)) }
+            else { Rectangle().fill(Color.gray.opacity(0.15)); Image(systemName: "film").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            Text(DisplayFormat.duration(video.facts.duration)).font(.system(size: 9, weight: .medium)).foregroundStyle(.white).padding(3).background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 3)).padding(4)
+        }
+        .task(id: video.id) {
+            if let asset = video.asset { image = await PhotosService.thumbnail(asset, size: CGSize(width: 200, height: 150)) }
+            else if let url = video.fileURL {
+                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url)); generator.appliesPreferredTrackTransform = true; generator.maximumSize = CGSize(width: 200, height: 150)
+                if let result = try? await generator.image(at: CMTime(seconds: min(2, video.facts.duration / 2), preferredTimescale: 600)) { image = NSImage(cgImage: result.image, size: .zero) }
+            }
+        }
+    }
+}
+
+private struct SampleArtwork: View {
+    let seed: Int
+    private var palettes: [[Color]] { [[Color(red: 0.55, green: 0.73, blue: 0.77), Color(red: 0.16, green: 0.36, blue: 0.39)], [.orange.opacity(0.7), .brown], [.purple.opacity(0.4), .indigo], [.green.opacity(0.4), .teal], [.gray.opacity(0.3), .blue.opacity(0.7)], [.mint.opacity(0.5), .green.opacity(0.8)]] }
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                LinearGradient(colors: palettes[seed % palettes.count], startPoint: .topLeading, endPoint: .bottomTrailing)
+                Circle().fill(.white.opacity(0.4)).frame(width: proxy.size.width * 0.15).offset(x: proxy.size.width * 0.25, y: -proxy.size.height * 0.18)
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: proxy.size.height * 0.7))
+                    path.addLine(to: CGPoint(x: proxy.size.width * 0.35, y: proxy.size.height * 0.3))
+                    path.addLine(to: CGPoint(x: proxy.size.width * 0.7, y: proxy.size.height * 0.8))
+                    path.addLine(to: CGPoint(x: proxy.size.width, y: proxy.size.height * 0.5))
+                    path.addLine(to: CGPoint(x: proxy.size.width, y: proxy.size.height)); path.addLine(to: CGPoint(x: 0, y: proxy.size.height)); path.closeSubpath()
+                }.fill(.black.opacity(0.16))
+            }
+        }
+    }
+}
+
+struct HistoryView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) var dismiss
+    @State private var selectedDeletionIDs = Set<UUID>()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack { VStack(alignment: .leading, spacing: 5) { Text("Compression history").font(.title2.weight(.semibold)); Text("Every original, smaller copy, and replacement is recorded here.").foregroundStyle(.secondary) }; Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+            if !model.pending.isEmpty {
+                HStack {
+                    Label("\(model.pending.count) verified copies have originals in Photos.", systemImage: "checkmark.shield")
+                    Spacer()
+                    Menu("Select") {
+                        Button("All ready originals") { selectedDeletionIDs = Set(model.pending.map(\.id)) }
+                        Button("None") { selectedDeletionIDs.removeAll() }
+                    }.fixedSize()
+                    Button("Delete \(selectedDeletionIDs.intersection(Set(model.pending.map(\.id))).count) originals…") { model.deletePending(selectedDeletionIDs) }
+                        .disabled(model.isBusy || !model.connected || selectedDeletionIDs.intersection(Set(model.pending.map(\.id))).isEmpty)
+                }
+                    .padding(12).background(accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            }
+            if model.history.isEmpty { ContentUnavailableView("No operations yet", systemImage: "clock", description: Text("Completed and interrupted operations appear here.")) }
+            else {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(model.history) { record in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    if record.isDeletionCandidate {
+                                        Toggle("Select original", isOn: Binding(get: { selectedDeletionIDs.contains(record.id) }, set: { if $0 { selectedDeletionIDs.insert(record.id) } else { selectedDeletionIDs.remove(record.id) } }))
+                                            .toggleStyle(.checkbox).labelsHidden().disabled(model.isBusy)
+                                    }
+                                    Text(record.sourceName).font(.headline); Spacer(); Text(stageName(record.stage)).font(.caption.weight(.medium)).foregroundStyle(record.stage == .failed ? .orange : accent)
+                                }
+                                HStack { Text(record.startedAt.formatted()); Spacer(); if let before = record.originalBytes, let after = record.outputBytes { Text("\(DisplayFormat.bytes(before)) → \(DisplayFormat.bytes(after))") } }.font(.caption).foregroundStyle(.secondary)
+                                if let error = record.error { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
+                                HStack {
+                                    Button("Show archived files") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.backupPath)]) }
+                                    if FileManager.default.fileExists(atPath: record.outputPath) { Button("Play compressed copy") { NSWorkspace.shared.open(URL(fileURLWithPath: record.outputPath)) } }
+                                    if let id = record.replacementID { Button("Show copy in Photos") { model.showInPhotos(id: id) } }
+                                    Spacer()
+                                }.controlSize(.small)
+                            }.padding(15).background(surface, in: RoundedRectangle(cornerRadius: 10))
+                                .contextMenu {
+                                    if let id = record.replacementID {
+                                        Button("Show compressed copy in Photos") { model.showInPhotos(id: id) }
+                                    }
+                                    if !record.sourceID.hasPrefix("/"), record.stage != .originalDeleted {
+                                        Button("Show original in Photos") { model.showInPhotos(id: record.sourceID) }
+                                    }
+                                    Button("Show archived files") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.backupPath)]) }
+                                }
+                        }
+                    }
+                }
+            }
+            Text("Local archives are never removed automatically. Keep them until Photos has finished syncing and you have checked the smaller copies on your other devices.").font(.caption).foregroundStyle(.secondary)
+        }.padding(24).frame(width: 900, height: 610).tint(accent)
+            .onAppear { selectedDeletionIDs = Set(model.pending.map(\.id)) }
+    }
+    private func stageName(_ stage: OperationStage) -> String {
+        switch stage {
+        case .preparing: return "Preparation interrupted"
+        case .archived: return "Archived · encoding interrupted"
+        case .encoded: return "Encoded · import not completed"
+        case .imported: return "Imported · metadata needs review"
+        case .readyToDelete: return "Ready · original retained"
+        case .originalDeleted: return "Replaced in Photos"
+        case .keptOriginal: return "Original retained"
+        case .failed: return "Stopped or failed · original retained"
+        }
+    }
+}
