@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct PhotoCompressorApp: App {
+    @NSApplicationDelegateAdaptor(PhotoCompressorDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
     var body: some Scene {
         WindowGroup("Photo Compressor") {
@@ -9,6 +10,7 @@ struct PhotoCompressorApp: App {
                 .frame(minWidth: 1100, minHeight: 720)
                 .onAppear {
                     NSApplication.shared.setActivationPolicy(.regular)
+                    AppIcon.applyToDock()
                     NSApplication.shared.activate(ignoringOtherApps: true)
                     exportDemoSnapshotIfRequested()
                 }
@@ -32,5 +34,24 @@ struct PhotoCompressorApp: App {
             view.cacheDisplay(in: view.bounds, to: image)
             if let data = image.representation(using: .png, properties: [:]) { try? data.write(to: destination) }
         }
+    }
+}
+
+enum AppIcon {
+    static let image: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") else { return nil }
+        return NSImage(contentsOf: url)
+    }()
+
+    static func applyToDock() {
+        guard let image else { return }
+        NSApplication.shared.applicationIconImage = image
+        NSApplication.shared.dockTile.display()
+    }
+}
+
+final class PhotoCompressorDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        AppIcon.applyToDock()
     }
 }

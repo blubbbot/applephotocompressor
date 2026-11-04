@@ -49,6 +49,12 @@ final class AppModel: ObservableObject {
     @Published var statuses: [String: RowStatus] = [:]
     @Published var history: [OperationRecord] = []
     @Published var showHistory = false
+    @Published var section: AppSection = .library {
+        didSet { if section == .review { player?.pause() } }
+    }
+    @Published var reviewFocusedID: UUID?
+    @Published var reviewPrompt: ReviewPrompt?
+    @Published var isReviewing = false
     @Published var notice: AppNotice?
     @Published var inspections: [String: InspectionStatus] = [:]
     @Published var inspectionPrompt: InspectionPrompt?
@@ -92,6 +98,8 @@ final class AppModel: ObservableObject {
     var focused: LibraryVideo? { videos.first { $0.id == focusedID } }
     var selectedVideos: [LibraryVideo] { videos.filter { selected.contains($0.id) } }
     var pending: [OperationRecord] { history.filter(\.isDeletionCandidate) }
+    var reviewRecords: [OperationRecord] { history.filter(\.hasReviewableCopy) }
+    var awaitingReview: [OperationRecord] { reviewRecords.filter(\.needsReview) }
     var selectedOriginalBytes: Int64 { selectedVideos.reduce(0) { $0 + ($1.facts.bytes ?? 0) } }
     var selectedEstimatedBytes: Int64 { selectedVideos.reduce(0) { $0 + plan($1).estimatedBytes } }
     var selectedSavings: Int64 { selectedVideos.reduce(0) { $0 + (plan($1).estimatedSavings ?? 0) } }
@@ -108,10 +116,10 @@ final class AppModel: ObservableObject {
         return available < estimatedArchiveBytes
     }
     var processedIDs: Set<String> {
-        Set(history.filter { $0.replacementID != nil || $0.stage == .originalDeleted }.map(\.sourceID))
+        Set(history.filter { $0.stage != .reverted && ($0.replacementID != nil || $0.stage == .originalDeleted) }.map(\.sourceID))
     }
     var visible: [LibraryVideo] {
-        let outputs = Set(history.compactMap(\.replacementID))
+        let outputs = Set(history.filter { $0.stage != .reverted }.compactMap(\.replacementID))
         return videos.filter {
             (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) &&
             (!hideUnsupported || $0.unsupportedReason == nil) &&
@@ -129,7 +137,7 @@ final class AppModel: ObservableObject {
     func plan(_ video: LibraryVideo) -> CompressionPlan { CompressionPlan(facts: video.facts, settings: settings) }
     func outputRecord(for id: String) -> OperationRecord? {
         history.first {
-            $0.sourceID == id && $0.outputBytes != nil && $0.stage != .failed &&
+            $0.sourceID == id && $0.outputBytes != nil && $0.stage != .failed && $0.stage != .reverted &&
             FileManager.default.fileExists(atPath: $0.outputPath)
         }
     }
@@ -139,7 +147,7 @@ final class AppModel: ObservableObject {
     }
 
     func photosID(for video: LibraryVideo, compressed: Bool = false) -> String? {
-        let record = history.first { $0.sourceID == video.id && $0.replacementID != nil }
+        let record = history.first { $0.sourceID == video.id && $0.replacementID != nil && $0.stage != .reverted }
         if compressed || record?.stage == .originalDeleted { return record?.replacementID }
         return video.asset?.localIdentifier
     }
@@ -394,8 +402,8 @@ final class AppModel: ObservableObject {
                 if flag.isCancelled { break }
                 activity = "\(index + 1) of \(batch.count) · \(video.name)"
                 overallProgress = Double(index) / Double(batch.count)
-                if history.contains(where: { $0.sourceID == video.id && $0.replacementID != nil }) {
-                    statuses[video.id] = RowStatus(text: "Existing copy · check History")
+                if history.contains(where: { $0.sourceID == video.id && $0.replacementID != nil && $0.stage != .reverted }) {
+                    statuses[video.id] = RowStatus(text: "Existing copy · check Review")
                     summary.skipped += 1; selected.remove(video.id); continue
                 }
                 var record = OperationRecord(sourceID: video.id, sourceName: video.name, backupPath: "", outputPath: "", settings: settings)
@@ -419,6 +427,8 @@ final class AppModel: ObservableObject {
                     if let original {
                         statuses[video.id] = RowStatus(text: "Reading library metadata…")
                         metadata = try await PhotosScript.readMetadata(id: original.localIdentifier)
+                        record.sourceTextMetadata = metadata
+                        try await journal.save(record)
                         statuses[video.id] = RowStatus(text: "Downloading and archiving…", fraction: 0)
                         try await PhotosService.archive(original, to: originalURL) { progress in
                             Task { @MainActor in self.statuses[video.id] = RowStatus(text: "Downloading and archiving…", fraction: progress) }
@@ -462,6 +472,7 @@ final class AppModel: ObservableObject {
                         try PhotosService.verifyImport(record.replacementID!, original: original, albums: albums)
                         try await PhotosScript.restoreMetadata(metadata, id: record.replacementID!)
                         record.metadataVerified = true
+                        record.replacementModifiedAt = PhotosService.fetch(record.replacementID!)?.modificationDate
                         record.stage = .readyToDelete
                         try await journal.save(record)
                         if replace { ready.append(record) }
@@ -482,7 +493,7 @@ final class AppModel: ObservableObject {
             }
             if !flag.isCancelled, !ready.isEmpty { await deleteReady(ready) }
             overallProgress = 1
-            activity = flag.isCancelled ? "Stopped safely. Ready copies and originals are retained." : "Batch finished. Review results in History."
+            activity = flag.isCancelled ? "Stopped safely. Ready copies and originals are retained." : "Batch finished. Open Review to compare your copies."
             await reloadHistory()
             summary.originalsDeleted = history.filter { operationIDs.contains($0.id) && $0.stage == .originalDeleted }.count
             summary.stopped = flag.isCancelled
@@ -497,7 +508,7 @@ final class AppModel: ObservableObject {
         let records = pending.filter { ids.contains($0.id) }
         guard !records.isEmpty else { return }
         isBusy = true
-        Task { await deleteReady(records); isBusy = false; await reloadHistory() }
+        Task { await deleteReady(records, markReviewed: true); isBusy = false; await reloadHistory() }
     }
 
     func deleteOriginal(for id: String) {
@@ -505,7 +516,7 @@ final class AppModel: ObservableObject {
         deletePending(ids)
     }
 
-    private func deleteReady(_ records: [OperationRecord]) async {
+    func deleteReady(_ records: [OperationRecord], markReviewed: Bool = false) async {
         guard let journal else { return }
         var candidates: [(OperationRecord, PHAsset)] = []
         for record in records {
@@ -514,6 +525,7 @@ final class AppModel: ObservableObject {
                       let original = PhotosService.fetch(record.sourceID),
                       let replacementID = record.replacementID, let replacement = PhotosService.fetch(replacementID),
                       original.modificationDate == record.sourceModifiedAt,
+                      record.replacementModifiedAt == nil || replacement.modificationDate == record.replacementModifiedAt,
                       abs(original.duration - replacement.duration) < 0.25 else {
                     throw MediaError.invalid("An original or replacement changed or disappeared. Original retained.")
                 }
@@ -523,24 +535,36 @@ final class AppModel: ObservableObject {
                     throw MediaError.invalid("The local archive or output is missing or changed. Original retained.")
                 }
                 candidates.append((record, original))
-            } catch { statuses[record.sourceID] = RowStatus(text: error.localizedDescription, failed: true) }
+            } catch {
+                statuses[record.sourceID] = RowStatus(text: error.localizedDescription, failed: true)
+                var failed = record; failed.error = error.localizedDescription
+                try? await journal.save(failed)
+                notice = AppNotice(text: error.localizedDescription)
+            }
         }
         guard !candidates.isEmpty else { return }
         activity = "Confirm original deletion in the macOS Photos dialog…"
         do {
             try await PhotosService.delete(candidates.map(\.1))
-            for (var record, _) in candidates {
-                record.stage = .originalDeleted; record.error = nil
-                try await journal.save(record)
-                statuses[record.sourceID] = RowStatus(text: "Replaced · original archived locally")
-            }
         } catch {
             for (var record, _) in candidates {
                 record.error = "Deletion cancelled or failed: \(error.localizedDescription)"
                 try? await journal.save(record)
                 statuses[record.sourceID] = RowStatus(text: "Smaller copy imported · original retained")
             }
-            notice = AppNotice(text: "Smaller copies are imported and your originals are retained. You can retry original deletion from History. \(error.localizedDescription)")
+            notice = AppNotice(text: "Smaller copies are imported and your originals are retained. You can retry original deletion from Review. \(error.localizedDescription)")
+            return
+        }
+        // A journal write failure after Photos succeeds must never be described
+        // as a cancelled deletion or overwrite other completed records.
+        for (var record, _) in candidates {
+            record.stage = .originalDeleted; record.error = nil
+            if markReviewed { record.reviewDecision = .accepted }
+            do { try await journal.save(record) }
+            catch { notice = AppNotice(text: "Photos deleted the original and retained the compressed copy, but the history update could not be saved. Both local archives remain. Reconnect Photos and review this item before continuing. \(error.localizedDescription)") }
+            statuses[record.sourceID] = RowStatus(text: "Replaced · original archived locally")
+            videos.removeAll { $0.id == record.sourceID }; selected.remove(record.sourceID)
+            if focusedID == record.sourceID { player?.pause(); player = nil; focusedID = nil }
         }
     }
 
@@ -549,7 +573,7 @@ final class AppModel: ObservableObject {
     private func reconcileImportedCopies() async {
         guard let journal else { return }
         await reloadHistory()
-        for var record in history where record.replacementID == nil && record.outputBytes != nil {
+        for var record in history where record.replacementID == nil && record.outputBytes != nil && [.encoded, .imported, .failed].contains(record.stage) {
             let name = URL(fileURLWithPath: record.outputPath).lastPathComponent
             let matches = videos.filter { $0.name == name && $0.id != record.sourceID }
             // Recover an import completed just before a crash, without granting deletion eligibility.

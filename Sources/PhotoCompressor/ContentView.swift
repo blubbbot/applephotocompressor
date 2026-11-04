@@ -11,7 +11,9 @@ struct ContentView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if model.videos.isEmpty && !model.isLoading {
+            if model.section == .review {
+                ReviewView().environmentObject(model)
+            } else if model.videos.isEmpty && !model.isLoading {
                 if model.connected { emptyLibrary } else { welcome }
             }
             else {
@@ -36,6 +38,10 @@ struct ContentView: View {
             Button("Download and inspect") { model.confirmInspection(prompt) }
             Button("Cancel", role: .cancel) { model.inspectionPrompt = nil }
         } message: { prompt in Text(prompt.message) }
+        .confirmationDialog("Revert compression?", isPresented: Binding(get: { model.reviewPrompt != nil }, set: { if !$0 { model.reviewPrompt = nil } }), titleVisibility: .visible, presenting: model.reviewPrompt) { prompt in
+            Button(prompt.isPhotosOperation ? "Keep original & remove compressed Photos copy" : "Revert compression", role: .destructive) { model.confirmRevert(prompt) }
+            Button("Cancel", role: .cancel) { model.reviewPrompt = nil }
+        } message: { prompt in Text(prompt.message) }
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
             if !model.isBusy { model.refreshArchiveSpace() }
         }
@@ -43,7 +49,7 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            if let icon = NSImage(named: "AppIcon") {
+            if let icon = AppIcon.image {
                 Image(nsImage: icon).resizable().frame(width: 36, height: 36)
             } else {
                 Image(systemName: "rectangle.stack.badge.minus").font(.system(size: 25, weight: .medium)).foregroundStyle(accent)
@@ -54,10 +60,11 @@ struct ContentView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            Picker("Workspace", selection: $model.section) {
+                Text("Library").tag(AppSection.library)
+                Text(model.awaitingReview.isEmpty ? "Review" : "Review (\(model.awaitingReview.count))").tag(AppSection.review)
+            }.pickerStyle(.segmented).frame(width: 220)
             if model.indexingSizes { ProgressView().controlSize(.small); Text("Reading file sizes…").font(.caption).foregroundStyle(.secondary) }
-            if !model.pending.isEmpty {
-                Button { model.showHistory = true } label: { Label("\(model.pending.count) ready to delete", systemImage: "checkmark.circle") }
-            }
             Button { model.showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
             Menu {
                 Button("Connect Photos Library…") { model.connect() }
@@ -230,10 +237,10 @@ struct ContentView: View {
                         Label(status.text, systemImage: status.failed ? "exclamationmark.circle" : "checkmark.circle").font(.callout).foregroundStyle(status.failed ? .orange : accent)
                     }
                     if model.pending.contains(where: { $0.sourceID == video.id }) {
-                        Button { model.deleteOriginal(for: video.id) } label: {
-                            Label("Delete this original from Photos…", systemImage: "trash").frame(maxWidth: .infinity).padding(.vertical, 5)
+                        Button { model.openReview(model.outputRecord(for: video.id)) } label: {
+                            Label("Review this compressed copy", systemImage: "rectangle.split.2x1").frame(maxWidth: .infinity).padding(.vertical, 5)
                         }.buttonStyle(.bordered).disabled(model.isBusy || !model.connected)
-                        Text("The verified smaller copy and local original archive are kept. macOS asks you to confirm.").font(.caption).foregroundStyle(.secondary)
+                        Text("Compare both versions side by side, then accept or revert in the Review tab.").font(.caption).foregroundStyle(.secondary)
                     }
                     Button { model.toggle(video) } label: {
                         Label(video.unsupportedReason != nil ? "Protected from compression" : model.selected.contains(video.id) ? "Selected for compression" : "Select for compression", systemImage: video.unsupportedReason != nil ? "lock.fill" : model.selected.contains(video.id) ? "checkmark.circle.fill" : "plus.circle")
@@ -327,7 +334,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     settingLabel("After compression", symbol: "checkmark.circle")
                     Toggle("Replace originals in Photos", isOn: $model.replaceOriginals).toggleStyle(.switch).font(.callout).disabled(!model.connected && !model.demo)
-                    Text(model.replaceOriginals && (model.connected || model.demo) ? "Validated copies are imported first. macOS then asks once to delete the successfully replaced originals." : "Keep the originals. Photos videos get a smaller imported copy; local files get a smaller file in the archive.")
+                    Text(model.replaceOriginals && (model.connected || model.demo) ? "Validated copies are imported first. macOS then asks once to delete the successfully replaced originals. The Review tab still lets you compare or revert them." : "Keep both versions until you decide in the Review tab. Compare side by side, then accept and delete the original or revert the compressed copy.")
                         .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
                 }
                 Divider()
@@ -370,7 +377,8 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 10) {
-            if model.isBusy { ProgressView(value: model.overallProgress).tint(accent) }
+            if model.isReviewing { ProgressView().controlSize(.small) }
+            else if model.isBusy { ProgressView(value: model.overallProgress).tint(accent) }
             if let summary = model.batchSummary, !model.isBusy {
                 HStack(spacing: 14) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -379,11 +387,22 @@ struct ContentView: View {
                         Text("\(DisplayFormat.bytes(summary.savedBytes)) less space in the completed copies").font(.caption).foregroundStyle(accent)
                     }
                     Spacer()
-                    Button("Review in History") { model.showHistory = true }
+                    Button("Open Review") { model.openReview() }
                     Button { model.batchSummary = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).accessibilityLabel("Dismiss batch summary")
                 }.padding(12).background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
             }
-            HStack(spacing: 22) {
+            if model.section == .review {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(model.isBusy ? model.activity : "\(model.awaitingReview.count) copies awaiting review").font(.callout.weight(.semibold))
+                        Text("Your decisions are saved. Return here whenever you are ready.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if model.isBusy && !model.isReviewing { Button("Stop safely") { model.stop() } }
+                    Button("Back to Library") { model.section = .library }
+                }
+            } else {
+              HStack(spacing: 22) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(model.isBusy ? model.activity : "\(model.selected.count) videos selected").font(.callout.weight(.semibold)).lineLimit(1)
                     Text(model.isBusy ? "Originals stay archived. Stopping never deletes an unfinished original." : model.unknownSelectedSizes > 0 ? "\(model.unknownSelectedSizes) original sizes pending · measured during download" : "\(DisplayFormat.bytes(model.selectedOriginalBytes)) → ~\(DisplayFormat.bytes(model.selectedEstimatedBytes)) estimated")
@@ -393,7 +412,8 @@ struct ContentView: View {
                 if !model.selected.isEmpty && !model.isBusy {
                     VStack(alignment: .trailing, spacing: 3) { Text("~" + DisplayFormat.bytes(model.selectedSavings)).font(.system(size: 24, weight: .semibold, design: .rounded)).foregroundStyle(accent); Text(model.connected || model.demo ? "potential iCloud savings" : "estimated file savings").font(.caption2).foregroundStyle(.secondary) }
                 }
-                if model.isBusy { Button("Stop safely") { model.stop() }.controlSize(.large) }
+                if model.isBusy && !model.isReviewing { Button("Stop safely") { model.stop() }.controlSize(.large) }
+                else if model.isReviewing { Text("Updating Photos…").foregroundStyle(.secondary) }
                 else {
                     Button {
                         if model.demo { model.connect() } else { model.startBatch() }
@@ -405,6 +425,7 @@ struct ContentView: View {
                         .help(model.isInspecting ? "Wait for inspection to finish or cancel it before starting compression" : "Compress the selected videos")
                 }
             }
+            }
         }.padding(.horizontal, 24).padding(.vertical, 16).background(surface)
     }
 }
@@ -412,7 +433,7 @@ struct ContentView: View {
 // AVKit's SwiftUI VideoPlayer overlay aborts during generic superclass metadata
 // initialization on the tested macOS 15 runtime with the current SDK. The native
 // macOS view provides the same playback controls without that overlay.
-private struct NativeVideoPlayer: NSViewRepresentable {
+struct NativeVideoPlayer: NSViewRepresentable {
     let player: AVPlayer
 
     func makeNSView(context: Context) -> AVPlayerView {
@@ -538,6 +559,9 @@ private struct VideoContextMenu: View {
             Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: { Label("Show in Finder", systemImage: "folder") }
         }
         Divider()
+        if let record = model.outputRecord(for: video.id), record.hasReviewableCopy {
+            Button("Review side by side") { model.openReview(record) }
+        }
         Button("Preview video") { model.focus(video) }
         if video.asset != nil, !video.hasInspectedFacts, video.unsupportedReason == nil {
             Button("Inspect original…") { model.requestInspection(video) }
@@ -624,18 +648,19 @@ struct HistoryView: View {
                                 HStack { Text(record.startedAt.formatted()); Spacer(); if let before = record.originalBytes, let after = record.outputBytes { Text("\(DisplayFormat.bytes(before)) → \(DisplayFormat.bytes(after))") } }.font(.caption).foregroundStyle(.secondary)
                                 if let error = record.error { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
                                 HStack {
+                                    if record.hasReviewableCopy { Button("Review side by side") { model.openReview(record); dismiss() } }
                                     Button("Show archived files") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.backupPath)]) }
                                     if FileManager.default.fileExists(atPath: record.outputPath) { Button("Play compressed copy") { NSWorkspace.shared.open(URL(fileURLWithPath: record.outputPath)) } }
-                                    if let id = record.replacementID { Button("Show copy in Photos") { model.showInPhotos(id: id) } }
+                                    if let id = record.replacementID, record.stage != .reverted { Button("Show copy in Photos") { model.showInPhotos(id: id) } }
                                     Spacer()
                                 }.controlSize(.small)
                             }.padding(15).background(surface, in: RoundedRectangle(cornerRadius: 10))
                                 .contextMenu {
-                                    if let id = record.replacementID {
+                                    if let id = record.replacementID, record.stage != .reverted {
                                         Button("Show compressed copy in Photos") { model.showInPhotos(id: id) }
                                     }
-                                    if !record.sourceID.hasPrefix("/"), record.stage != .originalDeleted {
-                                        Button("Show original in Photos") { model.showInPhotos(id: record.sourceID) }
+                                    if record.isPhotosOperation, record.stage != .originalDeleted && record.stage != .reverting || record.restoredOriginalID != nil {
+                                        Button("Show original in Photos") { model.showInPhotos(id: record.restoredOriginalID ?? record.sourceID) }
                                     }
                                     Button("Show archived files") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.backupPath)]) }
                                 }
@@ -657,6 +682,8 @@ struct HistoryView: View {
         case .originalDeleted: return "Replaced in Photos"
         case .keptOriginal: return "Original retained"
         case .failed: return "Stopped or failed · original retained"
+        case .reverting: return "Revert interrupted · original protected"
+        case .reverted: return "Reverted · original kept"
         }
     }
 }

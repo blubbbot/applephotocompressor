@@ -59,22 +59,50 @@ for trying the encoder without modifying any Photos library.
 4. Choose an archive folder outside iCloud Drive with enough room for full originals and compressed
    files. An external drive can be useful. The default is
    `~/Movies/Photo Compressor Backups`.
-5. Enable **Replace originals in Photos**, then click **Compress & replace**. The app downloads and archives each original,
+5. Leave **Replace originals in Photos** off for a review-first workflow, or enable it and click **Compress & replace**. The app downloads and archives each original,
    encodes a smaller HEVC copy, validates it, imports it, and restores supported
    library metadata. After the batch, macOS asks you to confirm deletion of
    successfully replaced originals.
 
 Replacement is initially off, so the first batch retains both versions in Photos.
 Turn **Replace originals in Photos** off whenever you want to trial a batch while retaining both
-versions in Photos. **History** shows the archive locations and allows playback
+versions in Photos. The separate **Review** tab shows compressed videos awaiting
+a decision, with a persistent count in the tab. It never opens as a modal after
+a batch. **History** shows the archive locations and allows playback
 of compressed files. A focused video with an available output also has an
 Original/Compressed preview switch. Processed items are hidden by default; use
 the list's filter menu to show them again.
 
-For a review-first workflow, leave replacement off, compress the batch, and play
-the smaller copies. Then use **Delete this original from Photos** in the preview,
-or choose the originals to delete in **History**. No manual reimport or searching
-for matching originals in Photos is needed.
+For a review-first workflow, leave replacement off, compress the batch, and open
+**Review**. Choose a video to compare its archived original and compressed file
+side by side. Playback, seeking, and frame stepping are linked; choose which
+version's audio to hear. Both previews use the local archives, without requesting
+another iCloud download. Source and output dimensions, frame rates, file sizes,
+and the encoding tradeoffs appear with the comparison.
+
+- **Accept & delete original** keeps the compressed Photos copy and requests
+  native macOS confirmation before removing the original.
+- **Revert compression** keeps the original and requests confirmation to remove
+  only the compressed Photos copy.
+- If automatic replacement already removed the original, **Accept compressed
+  version** only records approval. Reverting first imports the full archived
+  original, restores and verifies supported metadata, then requests deletion of
+  the compressed copy. The restored original is a new Photos asset, with a
+  unique restoration marker in its resource filename; People tags, the original
+  asset identifier, and editable history cannot be restored.
+
+Decisions survive restarts. **To review** shows undecided copies; **All** also
+shows accepted and reverted work. Accepted copies can still be reverted while
+their archives and required Photos assets are available. Reversion checkpoints
+and the unique resource name prevent a retry from importing another original
+after an interrupted restoration. Changed compressed assets are retained for
+manual inspection. Both archived files are always kept. For local-file mode,
+accept/revert records a decision and leaves all files in place.
+
+Photos must be connected before a review action changes its library; archived
+previews work without connecting. Missing or changed archives block deletion.
+History also retains its batch deletion action. No manual reimport or searching
+for matching originals in Photos is needed for the normal review workflow.
 
 Right-click a video and choose **Show in Photos** to reveal that specific item
 in the Photos app. The preview also has a Show in Photos button; when viewing a
@@ -138,7 +166,7 @@ or stops. This does not prevent manual sleep or closing a laptop's lid.
   retain its own downloaded original as well as the independent archive.
 - **Stop safely** prevents batch deletion. The current iCloud resource download
   may finish first. Verified, prepared replacements can be deleted later from
-  History after reconnecting the library.
+  Review after reconnecting the library.
 - Operations are recorded atomically in
   `~/Library/Application Support/PhotoCompressor/operations.json`. A corrupt
   journal disables compression rather than silently discarding history.
@@ -152,12 +180,16 @@ This is an initial locally built application. Automated tests cover packaging an
 the required Photos/Automation purpose strings, as well as
 actual HEVC encoding, portrait downscaling, frame-rate caps, exact audio
 packet preservation, generated HLG HDR, cancellation, and journal recovery.
-Native UI testing on macOS 15.8.2 (Intel) covers library connection, a generated
+Focused review tests cover legacy journal compatibility, acceptance eligibility,
+and persistent restoration checkpoints and decisions. Native UI testing on
+macOS 15.8.2 (Intel) from version 0.1.3 covers library connection, a generated
 video's compression and automatic import, favorite/date/album preservation,
 compressed playback, history persistence after restart, deletion from History,
 and automatic **Compress & replace** after native macOS confirmation. Two
 generated test originals were each reduced from 351 KB to 116 KB; the three
 existing photos remained present and both original archives were verified.
+The new 0.1.6 Review tab, linked playback, archive restoration, and Dock icon
+assignment have been compiled and packaged but have not had a live UI test.
 Start with a backed-up test clip and replacement disabled before using replacement.
 
 - Ordinary, unedited single-track video is supported. Edited videos, slow-motion,

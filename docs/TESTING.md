@@ -156,3 +156,40 @@ app has not been launched, and automated/native UI tests have not been rerun.
 Cloud-only inspection, cancellation races, Slo-mo classification with real
 footage, and the new UI workflows remain unverified in a live library. Earlier
 0.1.3 results do not establish these new behaviors.
+
+## 0.1.6 changes — 4 November 2026
+
+- Separate Library/Review navigation, with a persistent undecided-copy count.
+  Batches leave results in the Review tab without opening it or a modal.
+- Side-by-side local archive playback with linked play/pause, seeking, frame
+  stepping, drift correction, and one selected audio source. Both sides show
+  measured dimensions, nominal FPS, and file size.
+- Accept requests deletion only for a retained original that still passes all
+  archive, metadata, and asset-change checks. Already-replaced originals require
+  no further deletion; acceptance only records the review decision.
+- Revert removes the compressed Photos copy after confirming the original is
+  present. For an already-replaced original, it first restores the archived file,
+  restores/checks supported library metadata, and journals the restored asset ID
+  and verification checkpoint before requesting compressed-copy deletion.
+- A unique restoration resource filename recovers an import completed just
+  before a journal write or app interruption. Restored assets receive new Photos
+  identifiers. Existing People tags and editable history are not recovered.
+- Changed compressed assets and missing/changed archives block automatic removal.
+  A cancelled removal retains the videos. Local-file reviews only record a
+  decision. Both archived files always remain on disk.
+- Review decisions and optional metadata/checkpoint fields are backward
+  compatible with older operation journals. Reverted work stays in All and
+  History while its source can be compressed again.
+- The app explicitly loads the bundled ICNS and assigns it to the running
+  application's Dock tile at launch, and uses that same image in the header.
+- Original-deletion history errors are distinguished from actual Photos
+  deletion failures, so a later journal error cannot be reported as cancellation.
+
+Validation: `swift build` passed, and all five focused `ReviewJournalTests`
+passed. These check old-journal compatibility, auto-replaced reviews, deletion
+eligibility, local minimum-savings behavior, and durable restoration checkpoints
+and decisions. The universal release build and extracted package verification
+are also checked. No app launch, Photos mutation, UI run, or encoder test run
+was performed for this release. Linked playback, native accept/revert dialogs,
+archive restoration (including interrupted restores), and the visible Dock icon
+remain unverified at runtime.

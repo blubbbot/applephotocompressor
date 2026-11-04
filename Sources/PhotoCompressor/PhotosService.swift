@@ -18,11 +18,7 @@ struct LibraryVideo: Identifiable {
     var hasInspectedFacts: Bool { factsAreMeasured || fileURL != nil || isDemo }
 }
 
-struct ScriptMetadata: Codable, Equatable {
-    let title: String
-    let caption: String
-    let keywords: [String]
-}
+typealias ScriptMetadata = LibraryTextMetadata
 
 enum PhotosScript {
     static func reveal(id: String) async throws {
@@ -249,12 +245,14 @@ enum PhotosService {
         return albums
     }
 
-    static func importVideo(_ url: URL, original: PHAsset, albums: [PHAssetCollection]) async throws -> String {
+    static func importVideo(_ url: URL, original: PHAsset, albums: [PHAssetCollection], resourceFilename: String? = nil) async throws -> String {
         guard albums.allSatisfy({ $0.canPerform(.addContent) }) else { throw MediaError.invalid("One of the original's albums is not writable. The original is retained.") }
         var identifier: String?
         try await change {
             let request = PHAssetCreationRequest.forAsset()
-            request.addResource(with: .video, fileURL: url, options: nil)
+            let options = PHAssetResourceCreationOptions()
+            options.originalFilename = resourceFilename ?? url.lastPathComponent
+            request.addResource(with: .video, fileURL: url, options: options)
             request.creationDate = original.creationDate; request.location = original.location
             request.isFavorite = original.isFavorite; request.isHidden = original.isHidden
             if let placeholder = request.placeholderForCreatedAsset {
@@ -279,6 +277,20 @@ enum PhotosService {
     }
 
     static func fetch(_ id: String) -> PHAsset? { PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject }
+
+    static func restoredVideo(named filename: String) async throws -> PHAsset? {
+        try await Task.detached(priority: .userInitiated) {
+            let options = PHFetchOptions(); options.includeHiddenAssets = true
+            var matches: [PHAsset] = []
+            PHAsset.fetchAssets(with: .video, options: options).enumerateObjects { asset, _, _ in
+                if PHAssetResource.assetResources(for: asset).contains(where: { $0.type == .video && $0.originalFilename == filename }) {
+                    matches.append(asset)
+                }
+            }
+            guard matches.count <= 1 else { throw MediaError.invalid("Multiple restored originals were found. Check them in Photos before continuing; no video was deleted.") }
+            return matches.first
+        }.value
+    }
 
     static func delete(_ assets: [PHAsset]) async throws {
         guard !assets.isEmpty else { return }
