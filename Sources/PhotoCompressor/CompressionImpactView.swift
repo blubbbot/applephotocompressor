@@ -110,7 +110,8 @@ struct CompressionImpactView: View {
 
     private var frameRateExplanation: String {
         guard video.hasInspectedFacts else {
-            return "The original frame rate is checked before encoding. Frames are removed only when the source exceeds your cap. The planning estimate currently assumes 30 fps."
+            let policy = settings.frameRate == .original ? "Original keeps the source frame rate." : "Frames are removed only when the source exceeds your chosen cap."
+            return policy + " Use Inspect original above to check the actual rate now; an iCloud download needs your confirmation. The planning estimate currently assumes 30 fps until inspection."
         }
         if reducesFrameRate {
             return "Fewer moments are kept each second, so fast motion can look less smooth. The video does not become shorter or play faster."
@@ -125,7 +126,7 @@ struct CompressionImpactView: View {
 
     private var colorExplanation: String {
         guard video.hasInspectedFacts else {
-            return "HDR/SDR is detected when the original downloads. Supported HDR is kept in 10-bit HEVC. Exact Dolby Vision metadata fidelity is not verified."
+            return "Use Inspect original to check HDR/SDR before compression. Supported HDR is kept in 10-bit HEVC. Exact Dolby Vision metadata fidelity is not verified."
         }
         return video.facts.isHDR ? "Supported HLG/PQ HDR is preserved. Dolby Vision dynamic metadata may change; exact Dolby Vision fidelity is not verified." : "The copy keeps standard dynamic range. No HDR is added."
     }

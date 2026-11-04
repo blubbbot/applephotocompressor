@@ -32,6 +32,13 @@ struct ContentView: View {
         .tint(accent)
         .sheet(isPresented: $model.showHistory) { HistoryView().environmentObject(model) }
         .alert(item: $model.notice) { notice in Alert(title: Text("Photo Compressor"), message: Text(notice.text), dismissButton: .default(Text("OK"))) }
+        .confirmationDialog("Download original for inspection?", isPresented: Binding(get: { model.inspectionPrompt != nil }, set: { if !$0 { model.inspectionPrompt = nil } }), titleVisibility: .visible, presenting: model.inspectionPrompt) { prompt in
+            Button("Download and inspect") { model.confirmInspection(prompt) }
+            Button("Cancel", role: .cancel) { model.inspectionPrompt = nil }
+        } message: { prompt in Text(prompt.message) }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+            if !model.isBusy { model.refreshArchiveSpace() }
+        }
     }
 
     private var header: some View {
@@ -119,6 +126,13 @@ struct ContentView: View {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search videos", text: $model.search).textFieldStyle(.plain)
                 }.padding(9).background(surface, in: RoundedRectangle(cornerRadius: 8))
+                if model.slowMotionCount > 0 {
+                    Button {
+                        model.hideUnsupported.toggle()
+                    } label: {
+                        Label("\(model.slowMotionCount) Slo-mo protected · \(model.hideUnsupported ? "Show" : "Hide")", systemImage: "lock.fill")
+                    }.buttonStyle(.link).font(.caption)
+                }
                 HStack {
                     Button("Select recommended") { model.selectRecommended() }.buttonStyle(.link)
                     Spacer()
@@ -137,6 +151,12 @@ struct ContentView: View {
                     Text("No matching videos").font(.title2.weight(.semibold))
                     Text("Change the filters or show processed videos.")
                         .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    if !model.search.isEmpty || model.minimumSize > 0 {
+                        Button("Clear search and size filters") { model.clearSearchAndSizeFilters() }
+                    }
+                    if model.hideProcessed, !model.processedIDs.isEmpty {
+                        Button("Show processed videos") { model.hideProcessed = false }
+                    }
                 }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -160,12 +180,16 @@ struct ContentView: View {
                                 .buttonStyle(.borderless).help("Reveal this video in the Photos app")
                         }
                         if model.output(for: video.id) != nil {
-                            Picker("Version", selection: $model.previewCompressed) { Text("Original").tag(false); Text("Compressed").tag(true) }
-                                .pickerStyle(.segmented).frame(width: 210).onChange(of: model.previewCompressed) { model.loadPreview() }
+                            Picker("Version", selection: Binding(get: { model.previewCompressed }, set: { model.switchPreview(compressed: $0) })) { Text("Original").tag(false); Text("Compressed").tag(true) }
+                                .pickerStyle(.segmented).frame(width: 210)
+                                .help("Switch versions at the same playback position")
                         }
                     }
-                    Label(compressionImpact(video).summary, systemImage: "slider.horizontal.3")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    VideoInspectionView(video: video).environmentObject(model)
+                    if video.unsupportedReason == nil {
+                        Label(compressionImpact(video).summary, systemImage: "slider.horizontal.3")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                     ZStack {
                         RoundedRectangle(cornerRadius: 14).fill(Color.black)
                         if let player = model.player { NativeVideoPlayer(player: player).clipShape(RoundedRectangle(cornerRadius: 14)) }
@@ -188,18 +212,20 @@ struct ContentView: View {
                             Text(video.date.formatted(date: .abbreviated, time: .omitted))
                             Text("·"); Text(DisplayFormat.duration(video.facts.duration))
                             Text("·"); Text("\(video.facts.width) × \(video.facts.height)")
+                            if video.hasInspectedFacts {
+                                Text("·"); Text("\(video.facts.frameRate.formatted(.number.precision(.fractionLength(0...2)))) fps")
+                            }
                             if video.facts.isHDR { Text("HDR").font(.caption2.weight(.semibold)).padding(.horizontal, 5).padding(.vertical, 2).background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 4)) }
                         }.font(.caption).foregroundStyle(.secondary)
                     }
-                    estimateCard(video)
-                    compressionImpact(video)
-                    if let reason = video.unsupportedReason {
-                        Label(reason, systemImage: "info.circle").font(.callout).foregroundStyle(.orange)
+                    if video.unsupportedReason == nil {
+                        estimateCard(video)
+                        compressionImpact(video)
+                        VStack(alignment: .leading, spacing: 9) {
+                            Label("Dates, location, favorites, albums, titles & captions", systemImage: "checkmark.shield").foregroundStyle(accent)
+                            Text("Library fields are restored and checked before an original can be deleted. People tags and editable history do not transfer.").foregroundStyle(.secondary)
+                        }.font(.caption).lineSpacing(3)
                     }
-                    VStack(alignment: .leading, spacing: 9) {
-                        Label("Dates, location, favorites, albums, titles & captions", systemImage: "checkmark.shield").foregroundStyle(accent)
-                        Text("Library fields are restored and checked before an original can be deleted. People tags and editable history do not transfer.").foregroundStyle(.secondary)
-                    }.font(.caption).lineSpacing(3)
                     if let status = model.statuses[video.id] {
                         Label(status.text, systemImage: status.failed ? "exclamationmark.circle" : "checkmark.circle").font(.callout).foregroundStyle(status.failed ? .orange : accent)
                     }
@@ -210,7 +236,7 @@ struct ContentView: View {
                         Text("The verified smaller copy and local original archive are kept. macOS asks you to confirm.").font(.caption).foregroundStyle(.secondary)
                     }
                     Button { model.toggle(video) } label: {
-                        Label(model.selected.contains(video.id) ? "Selected for compression" : "Select for compression", systemImage: model.selected.contains(video.id) ? "checkmark.circle.fill" : "plus.circle")
+                        Label(video.unsupportedReason != nil ? "Protected from compression" : model.selected.contains(video.id) ? "Selected for compression" : "Select for compression", systemImage: video.unsupportedReason != nil ? "lock.fill" : model.selected.contains(video.id) ? "checkmark.circle.fill" : "plus.circle")
                             .frame(maxWidth: .infinity).padding(.vertical, 5)
                     }.buttonStyle(.bordered).disabled(model.isBusy || video.unsupportedReason != nil)
                 }.padding(24)
@@ -280,6 +306,8 @@ struct ContentView: View {
                     settingLabel("Maximum frame rate", symbol: "film")
                     Picker("Frame rate", selection: $model.settings.frameRate) { ForEach(FrameRate.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
                     Text("Smaller sources keep their resolution and frame rate.").font(.caption2).foregroundStyle(.secondary)
+                    Text("Original frame rate is the default. Choose a lower cap only when you want to remove frames. Slo-mo videos stay protected.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 12) {
@@ -311,6 +339,27 @@ struct ContentView: View {
                         Text(model.backupDirectory.path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")).font(.caption).lineLimit(3).truncationMode(.middle).textSelection(.enabled)
                     }.padding(11).frame(maxWidth: .infinity, alignment: .leading).background(surface, in: RoundedRectangle(cornerRadius: 8))
                     HStack { Button("Choose folder…") { model.chooseArchive() }; Spacer(); Button { NSWorkspace.shared.open(model.backupDirectory) } label: { Image(systemName: "arrow.up.forward.square") }.help("Open archive in Finder") }
+                    if let space = model.archiveSpace {
+                        if let available = space.availableBytes {
+                            Text("\(DisplayFormat.bytes(available)) available\(space.volumeName.map { " on " + $0 } ?? "")")
+                                .font(.caption.weight(.medium))
+                        } else if let error = space.error {
+                            Text(error).font(.caption).foregroundStyle(.orange)
+                        }
+                    } else {
+                        Text("Checking archive disk space…").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !model.selected.isEmpty {
+                        Text("Selection needs \(model.unknownSelectedSizes > 0 ? "at least " : "~")\(DisplayFormat.bytes(model.estimatedArchiveBytes)) including working space.")
+                            .font(.caption).foregroundStyle(model.archiveMayBeTooSmall ? Color.orange : .secondary)
+                        if model.unknownSelectedSizes > 0 {
+                            Text("Some original sizes are unknown; the estimate can increase after inspection.").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if model.archiveMayBeTooSmall {
+                            Label("This selection may exceed the available archive space.", systemImage: "externaldrive.badge.exclamationmark")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
                     Text("An external disk works well for a large library. Downloads and backups need free disk space.").font(.caption2).foregroundStyle(.secondary)
                 }
             }.padding(20).disabled(model.isBusy)
@@ -322,6 +371,18 @@ struct ContentView: View {
     private var footer: some View {
         VStack(spacing: 10) {
             if model.isBusy { ProgressView(value: model.overallProgress).tint(accent) }
+            if let summary = model.batchSummary, !model.isBusy {
+                HStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(summary.title).font(.headline)
+                        Text(summary.details).font(.caption).foregroundStyle(.secondary)
+                        Text("\(DisplayFormat.bytes(summary.savedBytes)) less space in the completed copies").font(.caption).foregroundStyle(accent)
+                    }
+                    Spacer()
+                    Button("Review in History") { model.showHistory = true }
+                    Button { model.batchSummary = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).accessibilityLabel("Dismiss batch summary")
+                }.padding(12).background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+            }
             HStack(spacing: 22) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(model.isBusy ? model.activity : "\(model.selected.count) videos selected").font(.callout.weight(.semibold)).lineLimit(1)
@@ -340,7 +401,8 @@ struct ContentView: View {
                         Label(model.demo ? "Connect Photos to begin" : model.connected && model.replaceOriginals ? "Compress & replace \(model.selected.count)" : "Compress \(model.selected.count) copies", systemImage: "arrow.down.right.and.arrow.up.left")
                             .padding(.horizontal, 9).padding(.vertical, 6)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
-                        .disabled((model.selected.isEmpty && !model.demo) || model.isLoading || model.indexingSizes || model.journal == nil)
+                        .disabled((model.selected.isEmpty && !model.demo) || model.isLoading || model.indexingSizes || model.isInspecting || model.journal == nil)
+                        .help(model.isInspecting ? "Wait for inspection to finish or cancel it before starting compression" : "Compress the selected videos")
                 }
             }
         }.padding(.horizontal, 24).padding(.vertical, 16).background(surface)
@@ -445,7 +507,7 @@ private struct VideoRow: View {
                     Text(status.text).font(.caption2).foregroundStyle(status.failed ? Color.orange : accent).lineLimit(1)
                     if let fraction = status.fraction { ProgressView(value: fraction).controlSize(.mini) }
                 } else if video.unsupportedReason != nil {
-                    Text("Original retained · special video").font(.caption2).foregroundStyle(.orange)
+                    Label(video.isSlowMotion ? "Slo-mo · protected" : "Original protected", systemImage: "lock.fill").font(.caption2).foregroundStyle(.orange)
                 } else if let savings = model.plan(video).estimatedSavings {
                     Text("Save ~\(DisplayFormat.bytes(savings))").font(.caption2.weight(.medium)).foregroundStyle(accent)
                 } else { Text("~\(DisplayFormat.bytes(model.plan(video).estimatedBytes)) output").font(.caption2).foregroundStyle(accent) }
@@ -477,6 +539,10 @@ private struct VideoContextMenu: View {
         }
         Divider()
         Button("Preview video") { model.focus(video) }
+        if video.asset != nil, !video.hasInspectedFacts, video.unsupportedReason == nil {
+            Button("Inspect original…") { model.requestInspection(video) }
+                .disabled(model.isBusy || model.inspections[video.id]?.isWorking == true)
+        }
         Button(model.selected.contains(video.id) ? "Deselect for compression" : "Select for compression") { model.toggle(video) }
             .disabled(model.isBusy || video.unsupportedReason != nil)
     }

@@ -30,7 +30,11 @@ public struct MediaInspection: Sendable {
 
 public enum VideoEncoder {
     public static func inspect(_ url: URL) async throws -> MediaInspection {
-        let asset = AVURLAsset(url: url)
+        let bytes = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init)
+        return try await inspect(asset: AVURLAsset(url: url), bytes: bytes)
+    }
+
+    public static func inspect(asset: AVAsset, bytes: Int64? = nil) async throws -> MediaInspection {
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         guard videoTracks.count == 1, let track = videoTracks.first else { throw MediaError.invalid("Only a single ordinary video track is supported. The original is retained.") }
         let duration = try await asset.load(.duration).seconds
@@ -39,6 +43,9 @@ public enum VideoEncoder {
         let transform = try await track.load(.preferredTransform)
         let oriented = CGRect(origin: .zero, size: size).applying(transform)
         let fps = try await track.load(.nominalFrameRate)
+        guard fps.isFinite, fps > 0 else {
+            throw MediaError.invalid("The original does not report a usable frame rate. It is retained rather than guessing its timing.")
+        }
         let formats = try await track.load(.formatDescriptions)
         let ext: NSDictionary = formats.first.flatMap { CMFormatDescriptionGetExtensions($0) }.map { $0 as NSDictionary } ?? [:]
         let primaries = ext[kCMFormatDescriptionExtension_ColorPrimaries] as? String
@@ -48,7 +55,6 @@ public enum VideoEncoder {
         let description = ext.description.lowercased()
         let dolby = description.contains("dvcc") || description.contains("dvvc") || description.contains("dolby")
         if dolby && !hdr { throw MediaError.invalid("This Dolby Vision profile has no supported HLG/PQ base layer. The original is retained.") }
-        let bytes = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init)
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
         var audioBitrate = 0
         for audio in audioTracks { audioBitrate += Int(try await audio.load(.estimatedDataRate)) }

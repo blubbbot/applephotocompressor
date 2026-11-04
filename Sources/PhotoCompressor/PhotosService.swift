@@ -13,6 +13,7 @@ struct LibraryVideo: Identifiable {
     let unsupportedReason: String?
     var isDemo = false
     var factsAreMeasured = false
+    var isSlowMotion = false
 
     var hasInspectedFacts: Bool { factsAreMeasured || fileURL != nil || isDemo }
 }
@@ -129,22 +130,76 @@ enum PhotosService {
             options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
             options.includeHiddenAssets = false
             let assets = PHAsset.fetchAssets(with: .video, options: options)
+            var slowMotionIDs = Set<String>()
+            let slowMotionAlbums = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumSlomoVideos, options: nil)
+            slowMotionAlbums.enumerateObjects { album, _, _ in
+                PHAsset.fetchAssets(in: album, options: nil).enumerateObjects { asset, _, _ in
+                    slowMotionIDs.insert(asset.localIdentifier)
+                }
+            }
             var result: [LibraryVideo] = []
             assets.enumerateObjects { asset, _, _ in
                 let resources = PHAssetResource.assetResources(for: asset)
                 let original = resources.first(where: { $0.type == .video })
-                var reason: String?
-                if asset.mediaSubtypes.contains(.videoHighFrameRate) { reason = "Slow-motion video: special timing is retained by keeping the original." }
-                if asset.mediaSubtypes.contains(.videoCinematic) { reason = "Cinematic video: depth and focus adjustments need a dedicated export path." }
-                if asset.mediaSubtypes.contains(.spatialMedia) { reason = "Spatial video: stereo/depth information needs a dedicated export path." }
-                if resources.contains(where: { $0.type == .adjustmentData }) { reason = "Edited video: Photos adjustment history needs a separate export path." }
-                if asset.sourceType.contains(.typeCloudShared) { reason = "Shared-album items cannot be safely replaced with their sharing history." }
+                let slowMotion = asset.mediaSubtypes.contains(.videoHighFrameRate) || slowMotionIDs.contains(asset.localIdentifier)
+                let reason = slowMotion ? "Slo-mo protected: the captured frames and slow-motion timing are kept by excluding this video from compression." : protectionReason(for: asset, resources: resources)
                 result.append(LibraryVideo(id: asset.localIdentifier, name: original?.originalFilename ?? "Video", asset: asset, fileURL: nil,
                     facts: VideoFacts(width: asset.pixelWidth, height: asset.pixelHeight, duration: asset.duration),
-                    date: asset.creationDate ?? .distantPast, unsupportedReason: reason))
+                    date: asset.creationDate ?? .distantPast, unsupportedReason: reason, isSlowMotion: slowMotion))
             }
             return result
         }.value
+    }
+
+    static func protectionReason(for asset: PHAsset, resources: [PHAssetResource]? = nil) -> String? {
+        if asset.mediaSubtypes.contains(.videoHighFrameRate) { return "Slo-mo protected: the captured frames and slow-motion timing are retained." }
+        if asset.mediaSubtypes.contains(.videoCinematic) { return "Cinematic video: depth and focus adjustments need a dedicated export path." }
+        if asset.mediaSubtypes.contains(.spatialMedia) { return "Spatial video: stereo/depth information needs a dedicated export path." }
+        if (resources ?? PHAssetResource.assetResources(for: asset)).contains(where: { $0.type == .adjustmentData }) { return "Edited video: Photos adjustment history needs a separate export path." }
+        if asset.sourceType.contains(.typeCloudShared) { return "Shared-album items cannot be safely replaced with their sharing history." }
+        return nil
+    }
+
+    static func inspectOriginal(_ asset: PHAsset, allowNetwork: Bool, progress: @escaping @Sendable (Double) -> Void) async throws -> VideoFacts? {
+        if let reason = protectionReason(for: asset) { throw MediaError.invalid(reason) }
+        let request = OriginalVideoRequest()
+        let original: AVAsset? = try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                guard request.attach(continuation) else { return }
+                let options = PHVideoRequestOptions()
+                options.version = .original
+                options.isNetworkAccessAllowed = allowNetwork
+                options.progressHandler = { fraction, _, _, _ in progress(fraction) }
+                let id = PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { original, _, info in
+                    let error = info?[PHImageErrorKey] as? NSError
+                    let needsNetwork = (info?[PHImageResultIsInCloudKey] as? Bool) == true ||
+                        (error?.domain == PHPhotosErrorDomain && error?.code == PHPhotosError.Code.networkAccessRequired.rawValue)
+                    if (info?[PHImageCancelledKey] as? Bool) == true {
+                        request.finish(.failure(CancellationError()))
+                    } else if let original {
+                        request.finish(.success(original))
+                    } else if !allowNetwork, needsNetwork {
+                        request.finish(.success(nil))
+                    } else if let error {
+                        request.finish(.failure(error))
+                    } else if !allowNetwork {
+                        request.finish(.success(nil))
+                    } else {
+                        request.finish(.failure(MediaError.invalid("Photos could not provide the original video for inspection.")))
+                    }
+                }
+                request.setID(id)
+            }
+        }, onCancel: { request.cancel() })
+        try Task.checkCancellation()
+        guard let original else { return nil }
+        var bytes: Int64?
+        if let url = (original as? AVURLAsset)?.url, url.isFileURL {
+            bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+        }
+        let inspection = try await VideoEncoder.inspect(asset: original, bytes: bytes)
+        try Task.checkCancellation()
+        return inspection.facts
     }
 
     static func thumbnail(_ asset: PHAsset, size: CGSize) async -> NSImage? {
@@ -171,8 +226,8 @@ enum PhotosService {
 
     static func archive(_ asset: PHAsset, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
         let resources = PHAssetResource.assetResources(for: asset)
-        guard !resources.contains(where: { $0.type == .adjustmentData }),
-              let resource = resources.first(where: { $0.type == .video }) else {
+        if let reason = protectionReason(for: asset, resources: resources) { throw MediaError.invalid(reason) }
+        guard let resource = resources.first(where: { $0.type == .video }) else {
             throw MediaError.invalid("This video was edited or has no supported original resource. It has been kept.")
         }
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -237,5 +292,43 @@ enum PhotosService {
                 else { continuation.resume(throwing: error ?? MediaError.invalid("Photos declined the library change.")) }
             }
         }
+    }
+}
+
+// Resume at most once, even if cancellation races PhotoKit's callback or occurs
+// before PhotoKit returns the request ID.
+private final class OriginalVideoRequest: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<AVAsset?, Error>?
+    private var requestID: PHImageRequestID?
+    private var completed = false
+    private var cancelled = false
+
+    func attach(_ continuation: CheckedContinuation<AVAsset?, Error>) -> Bool {
+        lock.lock()
+        guard !completed else { lock.unlock(); continuation.resume(throwing: CancellationError()); return false }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    func setID(_ id: PHImageRequestID) {
+        lock.lock(); requestID = id; let shouldCancel = cancelled; lock.unlock()
+        if shouldCancel { PHImageManager.default().cancelImageRequest(id) }
+    }
+
+    func finish(_ result: Result<AVAsset?, Error>) {
+        lock.lock()
+        guard !completed else { lock.unlock(); return }
+        completed = true
+        let continuation = self.continuation; self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+
+    func cancel() {
+        lock.lock(); cancelled = true; let id = requestID; lock.unlock()
+        finish(.failure(CancellationError()))
+        if let id { PHImageManager.default().cancelImageRequest(id) }
     }
 }

@@ -26,7 +26,7 @@ public enum Quality: String, Codable, CaseIterable, Identifiable, Sendable {
 
 public struct CompressionSettings: Codable, Equatable, Sendable {
     public var resolution: Resolution = .fullHD
-    public var frameRate: FrameRate = .thirty
+    public var frameRate: FrameRate = .original
     public var quality: Quality = .balanced
     public var useCustomBitrate = false
     public var bitrateMbps: Double = 5

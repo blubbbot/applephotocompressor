@@ -128,3 +128,31 @@ Existing journal records remain readable; unknown source details are labeled.
 
 This release is built and packaged without another automated or native UI test
 run, as requested. The end-to-end test results above apply to 0.1.3.
+
+## 0.1.5 changes — 4 November 2026
+
+- Local-first original metadata inspection when a video is focused. Network
+  access is explicitly disabled for that first PhotoKit request.
+- On-demand confirmation before enabling an iCloud download for inspection,
+  with progress, cancellation, source-change checks, and original FPS/HDR
+  displayed after inspection. Photos' network-access-required error is handled
+  as a download-needed state.
+- Original frame rate is the default, with a one-time migration for existing
+  settings. Nominal frame rate must be finite and positive before encoding.
+- Slo-mo protection uses both the media subtype and the Slo-mo smart album.
+  Protected items are labeled and remain excluded from selection. The source's
+  protection status is rechecked before archiving.
+- Original/Compressed switching preserves position, playback state, and mute;
+  new-video focus resets the comparison position.
+- Sorting/search/filters persist; refresh retains valid selections, measured
+  metadata for unchanged assets, and the focused preview.
+- Batch completion summaries distinguish completed, skipped, failed,
+  interrupted, and unstarted work, plus measured savings and replaced originals.
+- Scoped automatic-idle-sleep prevention during batches and background archive
+  disk-space reporting, including estimates for the current selection.
+
+Validation for this release is compilation and package verification only. The
+app has not been launched, and automated/native UI tests have not been rerun.
+Cloud-only inspection, cancellation races, Slo-mo classification with real
+footage, and the new UI workflows remain unverified in a live library. Earlier
+0.1.3 results do not establish these new behaviors.

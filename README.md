@@ -85,10 +85,37 @@ Local videos offer **Show in Finder** instead.
 The preview summarizes what changes before compression. **What changes** shows
 source and target pixel dimensions, frame-rate changes, the selected video
 bitrate, the quality tradeoff, and what is preserved. Unknown source frame rate
-and HDR are labeled until the original is inspected. HEVC re-encoding remains
+and HDR are labeled until the original is inspected. Selecting a video first
+tries to inspect its original with iCloud access disabled. If the original is
+not available locally, use **Inspect original…**; a confirmation asks before an
+iCloud download is allowed, and the inspection can be cancelled. Playback may
+use a streamed preview independently of original inspection.
+
+**Original frame rate** is the default. On the first launch of 0.1.5, existing
+settings also switch to Original once; subsequent explicit frame-rate choices
+are remembered. Photos-recognized Slo-mo videos are excluded entirely, using
+both the high-frame-rate subtype and the Slo-mo smart album. The list shows a
+protected Slo-mo count and offers a way to show these normally hidden items.
+Unflagged high-frame-rate footage keeps its nominal frame rate unless you
+explicitly select a lower cap. An original with an unusable frame rate is kept
+rather than encoded with a guessed rate.
+
+HEVC re-encoding remains
 lossy even at Original resolution/frame rate. Finished copies show their actual
 file size and saved encoding settings, so later control changes do not alter
 the explanation of an already-created copy.
+
+Switching Original/Compressed retains the playhead position, playback state,
+and mute setting. Sorting, search, size filters, and visibility filters are
+remembered, and a library refresh retains valid selections and the focused
+preview. A completion summary shows ready, skipped, failed, interrupted, and
+unstarted items, plus measured savings in completed copies.
+
+The archive panel shows available disk space and estimated space for the
+selection, including working space. Estimates can increase once original
+metadata and unknown file sizes are inspected. Compression prevents automatic
+idle sleep while a batch is running; the assertion is released when it finishes
+or stops. This does not prevent manual sleep or closing a laptop's lid.
 
 ## Control and safeguards
 
@@ -139,6 +166,9 @@ Start with a backed-up test clip and replacement disabled before using replaceme
 - HDR HLG/PQ is encoded as 10-bit HEVC and checked for an HDR transfer function.
   Dolby Vision dynamic metadata may be regenerated; exact Dolby Vision fidelity
   has not been verified with real iPhone HDR footage.
+- Original frame rate uses the source's nominal rate. Exact timing preservation
+  for variable-frame-rate footage has not been verified. Photos-recognized
+  Slo-mo is excluded rather than relying on nominal FPS to preserve its timing.
 - Apple Silicon uses native hardware encoding when available. Intel builds use
   the native software HEVC encoder to avoid hardware initialization failures on
   older Macs.

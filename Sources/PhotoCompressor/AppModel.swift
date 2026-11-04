@@ -22,7 +22,7 @@ struct AppNotice: Identifiable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var videos: [LibraryVideo] = []
-    @Published var selected = Set<String>()
+    @Published var selected = Set<String>() { didSet { refreshArchiveSpace() } }
     @Published var focusedID: String?
     @Published var player: AVPlayer?
     @Published var previewLoading = false
@@ -31,11 +31,11 @@ final class AppModel: ObservableObject {
     @Published var settings = CompressionSettings() {
         didSet { if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: "compressionSettings") } }
     }
-    @Published var search = ""
-    @Published var sort: VideoSort = .largest
-    @Published var minimumSize: Int64 = 0
-    @Published var hideUnsupported = true
-    @Published var hideProcessed = true
+    @Published var search = "" { didSet { UserDefaults.standard.set(search, forKey: "librarySearch") } }
+    @Published var sort: VideoSort = .largest { didSet { UserDefaults.standard.set(sort.rawValue, forKey: "librarySort") } }
+    @Published var minimumSize: Int64 = 0 { didSet { UserDefaults.standard.set(minimumSize, forKey: "libraryMinimumSize") } }
+    @Published var hideUnsupported = true { didSet { UserDefaults.standard.set(hideUnsupported, forKey: "hideUnsupported") } }
+    @Published var hideProcessed = true { didSet { UserDefaults.standard.set(hideProcessed, forKey: "hideProcessed") } }
     @Published var replaceOriginals = false {
         didSet { UserDefaults.standard.set(replaceOriginals, forKey: "replaceOriginals") }
     }
@@ -50,13 +50,23 @@ final class AppModel: ObservableObject {
     @Published var history: [OperationRecord] = []
     @Published var showHistory = false
     @Published var notice: AppNotice?
+    @Published var inspections: [String: InspectionStatus] = [:]
+    @Published var inspectionPrompt: InspectionPrompt?
+    @Published var batchSummary: BatchSummary?
+    @Published var archiveSpace: ArchiveSpaceSnapshot?
     @Published var backupDirectory: URL {
-        didSet { UserDefaults.standard.set(backupDirectory.path, forKey: "backupDirectory") }
+        didSet { UserDefaults.standard.set(backupDirectory.path, forKey: "backupDirectory"); refreshArchiveSpace() }
     }
     let journal: OperationJournal?
     private var cancellation = CancellationFlag()
     private var previewTask: Task<Void, Never>?
     private var batchTask: Task<Void, Never>?
+    private var inspectionTasks: [String: Task<Void, Never>] = [:]
+    private var inspectionIDs: [String: UUID] = [:]
+    private var archiveSpaceTask: Task<Void, Never>?
+    private var previewPosition = CMTime.zero
+    private var previewShouldResume = false
+    private var previewMuted = false
 
     init() {
         backupDirectory = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "backupDirectory") ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/Photo Compressor Backups").path)
@@ -64,8 +74,18 @@ final class AppModel: ObservableObject {
         do { journal = try OperationJournal(url: journalURL) }
         catch { journal = nil; notice = AppNotice(text: "The operation history could not be read. Compression is disabled to avoid losing recovery information: \(error.localizedDescription)") }
         if let data = UserDefaults.standard.data(forKey: "compressionSettings"), let stored = try? JSONDecoder().decode(CompressionSettings.self, from: data) { settings = stored }
+        if !UserDefaults.standard.bool(forKey: "originalFrameRateDefaultV1") {
+            settings.frameRate = .original
+            if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: "compressionSettings") }
+            UserDefaults.standard.set(true, forKey: "originalFrameRateDefaultV1")
+        }
+        search = UserDefaults.standard.string(forKey: "librarySearch") ?? ""
+        sort = UserDefaults.standard.string(forKey: "librarySort").flatMap(VideoSort.init(rawValue:)) ?? .largest
+        minimumSize = max(0, (UserDefaults.standard.object(forKey: "libraryMinimumSize") as? NSNumber)?.int64Value ?? 0)
+        hideUnsupported = UserDefaults.standard.object(forKey: "hideUnsupported") as? Bool ?? true
+        hideProcessed = UserDefaults.standard.object(forKey: "hideProcessed") as? Bool ?? true
         replaceOriginals = UserDefaults.standard.bool(forKey: "replaceOriginals")
-        Task { await reloadHistory() }
+        Task { await reloadHistory(); refreshArchiveSpace() }
         if CommandLine.arguments.contains("--demo") { loadDemo() }
     }
 
@@ -76,6 +96,17 @@ final class AppModel: ObservableObject {
     var selectedEstimatedBytes: Int64 { selectedVideos.reduce(0) { $0 + plan($1).estimatedBytes } }
     var selectedSavings: Int64 { selectedVideos.reduce(0) { $0 + (plan($1).estimatedSavings ?? 0) } }
     var unknownSelectedSizes: Int { selectedVideos.filter { $0.facts.bytes == nil }.count }
+    var isInspecting: Bool { inspections.values.contains(where: \.isWorking) }
+    var slowMotionCount: Int { videos.filter(\.isSlowMotion).count }
+    var estimatedArchiveBytes: Int64 {
+        guard !selected.isEmpty else { return 0 }
+        let largest = selectedVideos.compactMap(\.facts.bytes).max() ?? 0
+        return selectedOriginalBytes + selectedEstimatedBytes + largest + 512_000_000
+    }
+    var archiveMayBeTooSmall: Bool {
+        guard let available = archiveSpace?.availableBytes, !selected.isEmpty else { return false }
+        return available < estimatedArchiveBytes
+    }
     var processedIDs: Set<String> {
         Set(history.filter { $0.replacementID != nil || $0.stage == .originalDeleted }.map(\.sourceID))
     }
@@ -120,14 +151,113 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func refreshArchiveSpace() {
+        archiveSpaceTask?.cancel()
+        let directory = backupDirectory
+        archiveSpaceTask = Task {
+            let snapshot = await Task.detached(priority: .utility) { ArchiveSpaceSnapshot.read(at: directory) }.value
+            guard !Task.isCancelled, backupDirectory == directory else { return }
+            archiveSpace = snapshot
+        }
+    }
+
+    func clearSearchAndSizeFilters() { search = ""; minimumSize = 0 }
+
+    func requestInspection(_ video: LibraryVideo) {
+        if focusedID != video.id { focus(video, inspectLocally: false) }
+        inspect(video, allowNetwork: false, promptIfUnavailable: true)
+    }
+
+    func confirmInspection(_ prompt: InspectionPrompt) {
+        inspectionPrompt = nil
+        guard let video = videos.first(where: { $0.id == prompt.id }) else { return }
+        if focusedID != video.id { focus(video, inspectLocally: false) }
+        inspect(video, allowNetwork: true)
+    }
+
+    func cancelInspection(id: String) {
+        inspectionIDs[id] = nil
+        inspectionTasks.removeValue(forKey: id)?.cancel()
+        inspections[id] = nil
+    }
+
+    private func inspect(_ video: LibraryVideo, allowNetwork: Bool, promptIfUnavailable: Bool = false) {
+        guard !isBusy, !video.isDemo, !video.hasInspectedFacts, video.unsupportedReason == nil,
+              let asset = video.asset, inspections[video.id]?.isWorking != true else { return }
+        let token = UUID(), modifiedAt = asset.modificationDate
+        inspectionIDs[video.id] = token
+        inspections[video.id] = allowNetwork ? .downloading(0) : .checking
+        inspectionTasks[video.id] = Task {
+            defer {
+                if inspectionIDs[video.id] == token {
+                    inspectionTasks[video.id] = nil; inspectionIDs[video.id] = nil
+                }
+                refreshArchiveSpace()
+            }
+            do {
+                let facts = try await PhotosService.inspectOriginal(asset, allowNetwork: allowNetwork) { fraction in
+                    guard allowNetwork else { return }
+                    Task { @MainActor in
+                        guard self.inspectionIDs[video.id] == token else { return }
+                        self.inspections[video.id] = .downloading(fraction)
+                    }
+                }
+                try Task.checkCancellation()
+                guard inspectionIDs[video.id] == token, let index = videos.firstIndex(where: { $0.id == video.id }) else { return }
+                guard let current = PhotosService.fetch(video.id), current.modificationDate == modifiedAt else {
+                    throw MediaError.invalid("This video changed during inspection. Refresh the library before trying again.")
+                }
+                if var facts {
+                    facts.bytes = facts.bytes ?? videos[index].facts.bytes
+                    videos[index].facts = facts; videos[index].factsAreMeasured = true
+                    inspections[video.id] = .ready
+                } else {
+                    inspections[video.id] = .needsDownload
+                    if promptIfUnavailable { inspectionPrompt = InspectionPrompt(id: video.id, name: video.name, bytes: video.facts.bytes) }
+                }
+            } catch {
+                guard inspectionIDs[video.id] == token else { return }
+                inspections[video.id] = error is CancellationError ? nil : .failed(error.localizedDescription)
+            }
+        }
+    }
+
     func connect() {
-        guard !isBusy, !isLoading else { return }
+        guard !isBusy, !isLoading, !indexingSizes else { return }
+        let refreshing = connected && !demo
+        let previous = Dictionary(uniqueKeysWithValues: videos.map { ($0.id, $0) })
+        let previousSelection = selected, previousFocus = focusedID
         isLoading = true; activity = "Opening your Photos library…"
         Task {
             do {
                 try await PhotosService.authorize()
-                videos = await PhotosService.videos()
-                connected = true; demo = false; selected.removeAll(); focusedID = nil; player = nil
+                await reloadHistory()
+                var loaded = await PhotosService.videos()
+                for index in loaded.indices {
+                    if let old = previous[loaded[index].id], old.asset?.modificationDate == loaded[index].asset?.modificationDate, old.hasInspectedFacts {
+                        loaded[index].facts = old.facts; loaded[index].factsAreMeasured = true
+                    } else if let record = history.first(where: { $0.sourceID == loaded[index].id && $0.sourceModifiedAt == loaded[index].asset?.modificationDate }), let facts = record.sourceFacts {
+                        loaded[index].facts = facts; loaded[index].factsAreMeasured = true
+                    }
+                }
+                let valid = Set(loaded.map(\.id))
+                let loadedByID = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, $0) })
+                for id in Array(inspectionTasks.keys) where !valid.contains(id) || previous[id]?.asset?.modificationDate != loadedByID[id]?.asset?.modificationDate {
+                    cancelInspection(id: id)
+                }
+                inspections = inspections.filter { valid.contains($0.key) && previous[$0.key]?.asset?.modificationDate == loadedByID[$0.key]?.asset?.modificationDate }
+                videos = loaded
+                connected = true; demo = false
+                selected = refreshing ? previousSelection.intersection(Set(loaded.filter { $0.unsupportedReason == nil }.map(\.id))) : []
+                let canKeepFocus = refreshing && previousFocus.map(valid.contains) == true
+                if canKeepFocus {
+                    focusedID = previousFocus
+                    if let id = previousFocus, previous[id]?.asset?.modificationDate != loadedByID[id]?.asset?.modificationDate {
+                        loadPreview(preservingPosition: false)
+                    }
+                } else {
+                    focusedID = nil; player?.pause(); player = nil
+                }
                 await reconcileImportedCopies()
                 isLoading = false; activity = "\(videos.count) videos in your library"
                 indexingSizes = true
@@ -140,6 +270,7 @@ final class AppModel: ObservableObject {
                     notice = AppNotice(text: "The library is open, but file sizes are unavailable. You can still preview and compress videos; sizes are measured when each original downloads. \(error.localizedDescription)")
                 }
                 indexingSizes = false
+                if let video = focused { inspect(video, allowNetwork: false) }
             } catch { isLoading = false; activity = ""; notice = AppNotice(text: error.localizedDescription) }
         }
     }
@@ -148,6 +279,7 @@ final class AppModel: ObservableObject {
         guard !isBusy else { return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.movie]; panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
+        clearInspections()
         let urls = panel.urls
         isLoading = true; activity = "Inspecting video files…"
         Task {
@@ -165,15 +297,35 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func focus(_ video: LibraryVideo) {
-        focusedID = video.id; previewCompressed = false; loadPreview()
+    func focus(_ video: LibraryVideo, inspectLocally: Bool = true) {
+        guard focusedID != video.id else { return }
+        if let id = focusedID, inspections[id]?.isWorking == true { cancelInspection(id: id) }
+        focusedID = video.id; previewCompressed = false; loadPreview(preservingPosition: false)
+        if inspectLocally { inspect(video, allowNetwork: false) }
     }
 
-    func loadPreview() {
+    func switchPreview(compressed: Bool) {
+        guard previewCompressed != compressed else { return }
+        previewCompressed = compressed
+        loadPreview()
+    }
+
+    func loadPreview(preservingPosition: Bool = true) {
+        if preservingPosition {
+            if let player {
+                let time = player.currentTime()
+                previewPosition = time.seconds.isFinite && time.seconds >= 0 ? time : .zero
+                previewShouldResume = player.rate > 0
+                previewMuted = player.isMuted
+            }
+        } else {
+            previewPosition = .zero; previewShouldResume = false; previewMuted = false
+        }
         previewTask?.cancel(); player?.pause(); player = nil; previewError = nil
         guard let video = focused else { return }
         previewLoading = true
         let useCompressed = previewCompressed
+        let position = previewPosition, shouldResume = previewShouldResume, muted = previewMuted
         previewTask = Task {
             do {
                 let item: AVPlayerItem
@@ -182,12 +334,25 @@ final class AppModel: ObservableObject {
                 else if let asset = video.asset { item = try await PhotosService.preview(asset) }
                 else { throw MediaError.invalid("Sample data. Open video files or connect Photos for playback.") }
                 guard !Task.isCancelled else { return }
-                player = AVPlayer(playerItem: item); previewLoading = false
+                let next = AVPlayer(playerItem: item)
+                next.isMuted = muted
+                if position.seconds.isFinite, position.seconds > 0 {
+                    let seconds = min(position.seconds, max(0, video.facts.duration - 0.001))
+                    _ = await next.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                }
+                guard !Task.isCancelled, focusedID == video.id, previewCompressed == useCompressed else { next.pause(); return }
+                player = next; previewLoading = false
+                if shouldResume { next.play() }
             } catch {
                 guard !Task.isCancelled else { return }
                 previewLoading = false; previewError = error.localizedDescription
             }
         }
+    }
+
+    private func clearInspections() {
+        for id in Array(inspectionTasks.keys) { cancelInspection(id: id) }
+        inspections.removeAll(); inspectionPrompt = nil
     }
 
     func toggle(_ video: LibraryVideo) {
@@ -210,22 +375,31 @@ final class AppModel: ObservableObject {
     }
 
     func startBatch() {
-        guard !isBusy, !demo, let journal else { return }
+        guard !isBusy, !isInspecting, !demo, let journal else { return }
         let batch = selectedVideos.filter { $0.unsupportedReason == nil }
         guard !batch.isEmpty else { return }
         let settings = self.settings, replace = replaceOriginals && connected, archive = backupDirectory
-        isBusy = true; overallProgress = 0; cancellation = CancellationFlag()
+        isBusy = true; overallProgress = 0; cancellation = CancellationFlag(); batchSummary = nil
         let flag = cancellation
         batchTask = Task {
+            let awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "Compressing videos and preserving original archives")
+            defer {
+                ProcessInfo.processInfo.endActivity(awake)
+                isBusy = false; refreshArchiveSpace()
+            }
+            var summary = BatchSummary(total: batch.count)
+            var operationIDs = Set<UUID>()
             var ready: [OperationRecord] = []
             for (index, video) in batch.enumerated() {
                 if flag.isCancelled { break }
                 activity = "\(index + 1) of \(batch.count) · \(video.name)"
                 overallProgress = Double(index) / Double(batch.count)
                 if history.contains(where: { $0.sourceID == video.id && $0.replacementID != nil }) {
-                    statuses[video.id] = RowStatus(text: "Existing copy · check History", failed: true); continue
+                    statuses[video.id] = RowStatus(text: "Existing copy · check History")
+                    summary.skipped += 1; selected.remove(video.id); continue
                 }
                 var record = OperationRecord(sourceID: video.id, sourceName: video.name, backupPath: "", outputPath: "", settings: settings)
+                operationIDs.insert(record.id)
                 let directory = archive.appendingPathComponent(record.id.uuidString)
                 let safeName = URL(fileURLWithPath: video.name).lastPathComponent
                 let originalURL = directory.appendingPathComponent(safeName)
@@ -276,6 +450,7 @@ final class AppModel: ObservableObject {
                     guard measuredPlan.meetsMinimumSavings(originalBytes: record.originalBytes ?? 0, outputBytes: record.outputBytes ?? 0, threshold: settings.minimumSavings) else {
                         record.stage = .keptOriginal; try await journal.save(record)
                         statuses[video.id] = RowStatus(text: "Skipped · below minimum savings")
+                        summary.skipped += 1
                         await reloadHistory(); continue
                     }
                     try flag.check()
@@ -294,9 +469,11 @@ final class AppModel: ObservableObject {
                         record.stage = .keptOriginal; try await journal.save(record)
                     }
                     let saved = (record.originalBytes ?? 0) - (record.outputBytes ?? 0)
+                    summary.completed += 1; summary.savedBytes += max(0, saved)
                     statuses[video.id] = RowStatus(text: "Copy ready · \(DisplayFormat.bytes(saved)) smaller")
                     selected.remove(video.id)
                 } catch {
+                    if error is CancellationError { summary.interrupted += 1 } else { summary.failed += 1 }
                     record.stage = .failed; record.error = error is CancellationError ? "Stopped; original retained." : error.localizedDescription
                     try? await journal.save(record)
                     statuses[video.id] = RowStatus(text: record.error ?? "Failed", failed: true)
@@ -304,9 +481,12 @@ final class AppModel: ObservableObject {
                 await reloadHistory()
             }
             if !flag.isCancelled, !ready.isEmpty { await deleteReady(ready) }
-            overallProgress = 1; isBusy = false
+            overallProgress = 1
             activity = flag.isCancelled ? "Stopped safely. Ready copies and originals are retained." : "Batch finished. Review results in History."
             await reloadHistory()
+            summary.originalsDeleted = history.filter { operationIDs.contains($0.id) && $0.stage == .originalDeleted }.count
+            summary.stopped = flag.isCancelled
+            batchSummary = summary
         }
     }
 
@@ -384,6 +564,7 @@ final class AppModel: ObservableObject {
 
     func loadDemo() {
         guard !isBusy else { return }
+        clearInspections()
         demo = true; connected = false; selected.removeAll(); player = nil; focusedID = nil
         let samples: [(String, Int, Int, Double, Int64, Bool)] = [
             ("A weekend by the sea.mov", 3840, 2160, 182, 1_480_000_000, true),
