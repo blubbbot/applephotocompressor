@@ -15,8 +15,8 @@ final class SharedLibraryController: ObservableObject {
     private var configuration = UUID()
     private var refreshTask: Task<Void, Never>?
     private var lastRefresh = Date.distantPast
-    // A failed refresh must not silently discard a previously detected shared
-    // original when deciding whether automatic replacement may proceed.
+    // Preserve shared evidence for the post-replacement Review hint if a later
+    // metadata read is temporarily unavailable.
     private var lastKnownShared: [String: SharedLibraryObservation] = [:]
 
     init() {
@@ -131,7 +131,21 @@ extension AppModel {
     }
 
     func sourceSharing(_ record: OperationRecord) -> SharedLibraryObservation? {
+        // Review filters describe the original at compression, even when it has
+        // already been deleted or the replacement is now in Personal Library.
+        if let saved = record.sourceSharedLibrary, saved.state != .unknown { return saved }
         let current = sharing.observation(for: record.sourceID)
         return current.state == .unknown ? (record.sourceSharedLibrary ?? current) : current
     }
+
+    func reviewSharingMatches(_ record: OperationRecord, filter: ReviewSharingFilter) -> Bool {
+        guard filter != .all else { return true }
+        guard record.isPhotosOperation else { return false }
+        return filter.includes(original: sourceSharing(record)?.state ?? .unknown,
+                               replacement: record.reviewPhotosID.map { sharing.observation(for: $0).state } ?? .unknown,
+                               hasPhotosTarget: record.reviewPhotosID != nil)
+    }
+
+    var filteredReviewRecords: [OperationRecord] { reviewRecords.filter { reviewSharingMatches($0, filter: reviewSharingFilter) } }
+    func needsSharing(_ record: OperationRecord) -> Bool { reviewSharingMatches(record, filter: .needsSharing) }
 }

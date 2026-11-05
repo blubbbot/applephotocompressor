@@ -351,3 +351,42 @@ deleted. Real Shared Library membership/resharing and the new UI remain untested
 live, consistent with the user's instruction to proceed without computer-use
 verification. Universal-package signature, privacy strings, icon resources,
 architectures, and the published ZIP checksum are checked separately.
+
+### 0.2.3 — automatic shared replacements and sharing filters
+
+Replace originals now applies to shared items using the same import, metadata,
+archive, cancellation, and native deletion-confirmation checks as other items.
+The special shared-original hold and once-per-session Shared Library approval
+have been removed. Source sharing observations remain in the journal, including
+when a fresh pre-deletion read detects sharing that was unknown at compression.
+A transient metadata failure retains any previous shared evidence for Review;
+sharing hints do not determine deletion eligibility.
+
+Review uses the saved source status where known, independently of the current
+replacement's placement. After automatic deletion it explains that the original
+has already been replaced, preserves the archive information, and offers
+Show copy to re-share… with Photos → Image → Move to Shared Library instructions.
+Refresh detects the copy's new state when available. Reverted originals use the
+restored item's identifier rather than revealing the removed compressed copy.
+
+Library has All libraries / Shared Library / Personal Library / Unknown filters.
+Review has All libraries / Shared originals / Personal originals / Unknown
+originals / Needs re-sharing. The latter includes shared originals with a
+Personal or Unknown replacement/restored original, automatically selects All
+copies (so accepted items remain findable), and clears an item after a fresh
+Shared result. It does not certify synchronization. Filters are independent and
+remembered. Review filters remain accessible with the sidebar hidden; explicit
+review navigation clears an excluding filter. Local-file review is included in
+All libraries and does not masquerade as a Photos placement result.
+
+All **39 automated tests** passed on Intel. Four new workflow tests exercise
+replacement/deletion/acceptance with preserved source observations, re-sharing
+queue transitions, restored-original reveal targets, and Unknown-versus-Personal
+filtering. Existing synthetic SQLite, JPEG/HEIC/Live Photo, video/HDR/audio,
+playback, journal/archive, ordering, and privacy regressions remain green.
+The final targeted run rechecks the 15 workflow, database, and review-journal
+tests after UI/dead-code cleanup. Universal builds and extracted ZIP checks cover
+both architectures, signatures, privacy descriptions, icons, and SQLite linkage.
+No real Photos library/database or app UI was opened, and no user-library asset
+was changed. Live shared deletion, menu/filter layout, and manual re-sharing
+remain untested, following the user's request to continue without UI testing.

@@ -11,7 +11,7 @@ struct ReviewView: View {
     private let ticker = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
     private let accent = Color(red: 0.10, green: 0.43, blue: 0.34)
 
-    private var records: [OperationRecord] { showAll ? model.reviewRecords : model.awaitingReview }
+    private var records: [OperationRecord] { showAll ? model.filteredReviewRecords : model.filteredReviewRecords.filter(\.needsReview) }
     private var focused: OperationRecord? { records.first { $0.id == model.reviewFocusedID } }
     private var focusedIndex: Int? { records.firstIndex { $0.id == model.reviewFocusedID } }
     private var showsSidebar: Bool { sidebarVisible && !model.reviewPreviewExpanded }
@@ -29,20 +29,30 @@ struct ReviewView: View {
                     comparison(record).id(record.id)
                 } else {
                     ContentUnavailableView {
-                        Label(model.awaitingReview.isEmpty ? "Ready when you are" : "Choose a copy to review", systemImage: "rectangle.split.2x1")
+                        Label(records.isEmpty && !model.reviewRecords.isEmpty ? "No matching copies" : model.awaitingReview.isEmpty ? "Ready when you are" : "Choose a copy to review", systemImage: "rectangle.split.2x1")
                     } description: {
                         Text("Compare the archived original and compressed file side by side, then accept or revert. Nothing opens automatically after compression.")
                     } actions: {
+                        if model.reviewSharingFilter != .all {
+                            Button("Show all libraries") { model.reviewSharingFilter = .all }
+                        }
+                        if !showAll && !model.filteredReviewRecords.isEmpty {
+                            Button("Show reviewed copies") { showAll = true }
+                        }
                         Button("Back to Library") { model.section = .library }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear {
+            if model.reviewSharingFilter == .needsSharing { showAll = true }
             if let id = model.reviewFocusedID, model.reviewRecords.contains(where: { $0.id == id && !$0.needsReview }) { showAll = true }
             chooseValidFocus()
         }
         .onChange(of: records.map(\.id)) { _, _ in chooseValidFocus() }
+        .onChange(of: model.reviewSharingFilter) { _, filter in
+            if filter == .needsSharing { showAll = true }
+        }
         .onChange(of: model.reviewFocusedID) { _, id in
             if let id, !records.contains(where: { $0.id == id }), model.reviewRecords.contains(where: { $0.id == id }) { showAll = true }
         }
@@ -78,7 +88,8 @@ struct ReviewView: View {
             if !showsSidebar {
                 Menu {
                     reviewFilter
-                } label: { Text(showAll ? "All copies" : "To review") }
+                    sharingFilter
+                } label: { Text(model.reviewSharingFilter == .all ? (showAll ? "All copies" : "To review") : model.reviewSharingFilter.title) }
                 .menuStyle(.borderlessButton).fixedSize()
             }
             Spacer(minLength: 12)
@@ -100,9 +111,16 @@ struct ReviewView: View {
 
     private var reviewFilter: some View {
         Picker("Review list", selection: $showAll) {
-            Text("To review (\(model.awaitingReview.count))").tag(false)
-            Text("All (\(model.reviewRecords.count))").tag(true)
+            Text("To review (\(model.filteredReviewRecords.filter(\.needsReview).count))").tag(false)
+            Text("All (\(model.filteredReviewRecords.count))").tag(true)
         }
+    }
+
+    private var sharingFilter: some View {
+        Picker("Original library", selection: $model.reviewSharingFilter) {
+            ForEach(ReviewSharingFilter.allCases) { Text($0.title).tag($0) }
+        }.pickerStyle(.menu).controlSize(.small)
+            .help("Uses the original's saved library status. Needs re-sharing includes shared originals whose current copy is Personal or Unknown, including accepted copies.")
     }
 
     private var sidebar: some View {
@@ -110,20 +128,29 @@ struct ReviewView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Compressed \(model.mediaMode.rawValue.lowercased())").font(.headline)
                 reviewFilter.pickerStyle(.segmented).labelsHidden()
+                sharingFilter
+                if model.reviewSharingFilter == .needsSharing {
+                    Text("Shared originals whose Photos replacement is Personal or Unknown. Includes accepted copies.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }.padding(14)
             Divider()
             if records.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "checkmark.circle").font(.largeTitle).foregroundStyle(accent)
-                    Text(model.reviewRecords.isEmpty ? "Compressed copies appear here after a batch." : "All copies reviewed.")
+                    Text(model.reviewRecords.isEmpty ? "Compressed copies appear here after a batch." : model.filteredReviewRecords.isEmpty ? "No copies match this library filter." : "All matching copies reviewed.")
                         .foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    if !model.reviewRecords.isEmpty { Button("Show reviewed copies") { showAll = true } }
+                    if !model.filteredReviewRecords.isEmpty && !showAll { Button("Show reviewed copies") { showAll = true } }
+                    if model.reviewSharingFilter != .all { Button("Show all libraries") { model.reviewSharingFilter = .all } }
+                    if !model.reviewRecords.isEmpty && (!model.sharing.enabled || model.sharing.library == nil) {
+                        Button("Set up sharing detection…") { model.chooseSharingLibrary() }.disabled(model.isBusy)
+                    }
                 }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $model.reviewFocusedID) {
                     ForEach(records) { record in
                         VideoSidebarRow(title: record.sourceName, detail: sizeSummary(record),
-                                        status: reviewState(record), savings: savingsSummary(record), statusColor: record.error == nil ? .secondary : .orange,
+                                        status: reviewState(record), savings: savingsSummary(record), statusColor: record.error != nil || model.needsSharing(record) ? .orange : .secondary,
                                         sharing: record.isPhotosOperation && (model.sharing.enabled || record.sourceSharedLibrary != nil) ? model.sourceSharing(record) : nil,
                                         sharingPrefix: "Original: ") {
                             ReviewThumbnail(url: URL(fileURLWithPath: record.outputPath), isPhoto: record.kind.isPhoto)
@@ -171,7 +198,7 @@ struct ReviewView: View {
                     }
                 }
                 if record.isPhotosOperation {
-                    SharedLibraryNotice(replacementID: record.stage == .reverted ? (record.restoredOriginalID ?? record.sourceID) : record.replacementID,
+                    SharedLibraryNotice(replacementID: record.reviewPhotosID,
                                         compact: model.reviewPreviewExpanded, restoredOriginal: record.stage == .reverted, record: record).environmentObject(model)
                 }
                 if !model.reviewPreviewExpanded {
@@ -311,6 +338,9 @@ struct ReviewView: View {
 
     private func reviewState(_ record: OperationRecord) -> String {
         if record.stage == .reverting { return "Revert needs attention" }
+        if model.needsSharing(record) {
+            return record.stage == .originalDeleted ? "Replaced · check re-sharing" : record.stage == .reverted ? "Reverted · check re-sharing" : "Copy ready · check re-sharing"
+        }
         if record.stage == .reverted { return "Reverted · original kept" }
         if record.reviewDecision == .accepted { return "Accepted" }
         if record.stage == .originalDeleted { return "Replaced · awaiting review" }

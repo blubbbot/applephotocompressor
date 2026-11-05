@@ -40,13 +40,6 @@ struct ContentView: View {
             Button("Download and inspect") { model.confirmInspection(prompt) }
             Button("Cancel", role: .cancel) { model.inspectionPrompt = nil }
         } message: { prompt in Text(prompt.message) }
-        .confirmationDialog("Shared Library membership cannot be preserved automatically", isPresented: $model.sharedLibraryReplacementPrompt, titleVisibility: .visible) {
-            Button("Compress copies for review") { model.startBatch(keepOriginals: true) }
-            Button("Replace automatically anyway", role: .destructive) { model.confirmAutomaticReplacement() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Shared Library placement cannot be restored automatically. Optional database detection is advisory; detected shared originals are always kept for Review. Unknown originals may also be shared. Move their copies in Photos before deleting them. Choose review to keep all originals, or acknowledge automatic replacement for other items this session.")
-        }
         .confirmationDialog("Revert compression?", isPresented: Binding(get: { model.reviewPrompt != nil }, set: { if !$0 { model.reviewPrompt = nil } }), titleVisibility: .visible, presenting: model.reviewPrompt) { prompt in
             Button(prompt.isPhotosOperation ? "Keep original & remove compressed Photos copy" : "Revert compression", role: .destructive) { model.confirmRevert(prompt) }
             Button("Cancel", role: .cancel) { model.reviewPrompt = nil }
@@ -151,6 +144,16 @@ struct ContentView: View {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search \(model.mediaMode.rawValue.lowercased())", text: $model.search).textFieldStyle(.plain)
                 }.padding(9).background(surface, in: RoundedRectangle(cornerRadius: 8))
+                if model.connected {
+                    Picker("Library", selection: $model.librarySharingFilter) {
+                        ForEach(LibrarySharingFilter.allCases) { Text($0.title).tag($0) }
+                    }.pickerStyle(.menu).controlSize(.small)
+                        .help("Filter by current advisory Shared / Personal / Unknown database labels.")
+                    if model.librarySharingFilter != .all && (!model.sharing.enabled || model.sharing.library == nil) {
+                        Button("Set up sharing detection…") { model.chooseSharingLibrary() }
+                            .buttonStyle(.link).font(.caption).disabled(model.isBusy)
+                    }
+                }
                 if model.slowMotionCount > 0 {
                     Button {
                         model.hideUnsupported.toggle()
@@ -186,6 +189,9 @@ struct ContentView: View {
                         .foregroundStyle(.secondary).multilineTextAlignment(.center)
                     if !model.search.isEmpty || model.minimumSize > 0 {
                         Button("Clear search and size filters") { model.clearSearchAndSizeFilters() }
+                    }
+                    if model.librarySharingFilter != .all {
+                        Button("Show all libraries") { model.librarySharingFilter = .all }
                     }
                     if model.hideProcessed, !model.processedIDs.isEmpty {
                         Button("Show processed videos") { model.hideProcessed = false }

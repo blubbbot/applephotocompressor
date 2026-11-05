@@ -85,11 +85,11 @@ final class SharedLibraryReaderTests: XCTestCase {
         var record = OperationRecord(sourceID: assetID, sourceName: "original.mov", backupPath: "/original", outputPath: "/copy", settings: CompressionSettings())
         let legacy = try JSONDecoder().decode(OperationRecord.self, from: JSONEncoder().encode(record))
         XCTAssertNil(legacy.sourceSharedLibrary)
-        XCTAssertFalse(legacy.requiresSharedLibraryReview)
+        XCTAssertFalse(legacy.sourceWasShared)
         record.sourceSharedLibrary = SharedLibraryObservation(state: .shared, checkedAt: creation, libraryID: libraryID, modelVersion: 18201, detail: "Fixture")
         let reopened = try JSONDecoder().decode(OperationRecord.self, from: JSONEncoder().encode(record))
         XCTAssertEqual(reopened.sourceSharedLibrary, record.sourceSharedLibrary)
-        XCTAssertTrue(reopened.requiresSharedLibraryReview)
+        XCTAssertTrue(reopened.sourceWasShared)
     }
 
     private func state(_ fixture: Fixture, _ identity: SharedLibraryAssetIdentity) throws -> SharedLibraryState? {

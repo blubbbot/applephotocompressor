@@ -43,19 +43,24 @@ struct SharedLibraryNotice: View {
     private var target: SharedLibraryObservation? { replacementID.map { model.sharing.observation(for: $0) } }
     private var placed: Bool { source?.state == .shared && target?.state == .shared }
     private var personal: Bool { source?.state == .personal && target?.state == .personal }
+    private var originalRemoved: Bool { record?.stage == .originalDeleted }
+    private var needsSharing: Bool { source?.state == .shared && target?.state != .shared }
     private var title: String {
-        if placed { return "Both items detected in Shared Library" }
+        if placed { return "\(restoredOriginal ? "Restored original" : "Replacement") detected in Shared Library" }
+        if needsSharing && originalRemoved { return "Shared original replaced · re-share the copy" }
         if source?.state == .shared { return "Original was shared · check the \(restoredOriginal ? "restored original" : "copy")" }
-        if personal { return "Both items detected in Personal Library" }
+        if personal { return "\(restoredOriginal ? "Restored original" : "Replacement") detected in Personal Library" }
         return "Shared Library placement is Unknown"
     }
     private var explanation: String {
-        if placed { return "Database metadata indicates the copy is shared. Check its placement and synchronization in Photos before deleting the original." }
-        if personal { return "Database metadata indicates both items are personal. This is an advisory result and does not verify iCloud synchronization." }
+        if placed { return "Database metadata indicates this Photos item is shared. \(originalRemoved ? "The full original remains in your local archive." : "Check its placement and synchronization in Photos before deleting the original.")" }
+        if personal { return "The original was recorded as personal; database metadata indicates this Photos item is also personal. This is advisory and does not verify iCloud synchronization." }
         if source?.state == .shared {
-            return "\(restoredOriginal ? "The restored original" : "The compressed copy") is \(target?.state == .personal ? "detected in Personal Library" : "not confirmed as shared"). In Photos, select it and choose Image → Move to Shared Library before deleting the shared source."
+            let placement = "\(restoredOriginal ? "The restored original" : "The compressed copy") is \(target?.state == .personal ? "detected in Personal Library" : "not confirmed as shared")."
+            let action = "Open it with the button above, then choose Image → Move to Shared Library in Photos. Return here and Refresh to check placement."
+            return "\(placement) \(action) \(originalRemoved ? "The original has already been replaced; its full local archive is retained." : restoredOriginal ? "The original pair remains archived locally." : "You can move the copy before accepting original deletion, or re-share it after automatic replacement.")"
         }
-        return restoredOriginal ? "A restored original is a new Photos item. If the original was shared, check and move it back to Shared Library in Photos." : "If the original was in iCloud Shared Photo Library, move the compressed copy there in Photos before deleting the original."
+        return restoredOriginal ? "A restored original is a new Photos item. If the original was shared, check and move it back to Shared Library in Photos." : "If the original was in iCloud Shared Photo Library, open the compressed copy in Photos and choose Image → Move to Shared Library. \(originalRemoved ? "The original has already been replaced; its full local archive is retained." : "Automatic replacement can delete the original before you re-share its copy.")"
     }
 
     var body: some View {
@@ -65,7 +70,8 @@ struct SharedLibraryNotice: View {
                     .font(.caption.weight(.semibold)).foregroundStyle(placed || personal ? Color.secondary : Color.orange)
                 Spacer()
                 if let replacementID {
-                    Button(restoredOriginal ? "Show original in Photos" : "Show copy in Photos") { model.showInPhotos(id: replacementID) }
+                    Button(needsSharing ? (restoredOriginal ? "Show original to re-share…" : "Show copy to re-share…") : (restoredOriginal ? "Show original in Photos" : "Show copy in Photos")) { model.showInPhotos(id: replacementID) }
+                        .buttonStyle(.bordered).help("Open this item in Photos. Choose Image → Move to Shared Library there.")
                         .controlSize(.small).disabled(!model.connected || model.isBusy)
                 }
             }
@@ -76,12 +82,12 @@ struct SharedLibraryNotice: View {
                     Button("Refresh") { model.refreshSharing(force: true) }.controlSize(.mini)
                         .disabled(!model.connected || !model.sharing.enabled || model.sharing.checking || model.isBusy)
                 }
-                if let record, let saved = record.sourceSharedLibrary, model.sharing.observation(for: record.sourceID).state == .unknown {
+                if let record, let saved = record.sourceSharedLibrary {
                     Text("Original result saved at compression: \(saved.checkedAt.formatted()). It may have changed since then.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            Text(record == nil ? "Detected shared originals are kept for Review, even with automatic replacement. Sharing cannot be restored automatically; Unknown items still need a manual check." : explanation)
+            Text(record == nil ? "Replace originals also applies to shared items. Their copies may start in Personal Library. In Review, filter Shared originals or Needs re-sharing, open each replacement in Photos, and move it to Shared Library." : explanation)
                 .font(.caption).foregroundStyle(.secondary)
             if !compact {
                 Text("Optional read-only database detection is advisory. Choose your current System Photo Library in the Library settings; backups or stale metadata can give outdated results. Moving an item to Shared Library must be done in Photos.")

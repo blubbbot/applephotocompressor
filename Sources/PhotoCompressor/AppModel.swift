@@ -37,8 +37,12 @@ final class AppModel: ObservableObject {
             updateListOrderNow()
         }
     }
-    @Published var sharedLibraryReplacementPrompt = false
-    private var sharedLibraryReplacementAcknowledged = false
+    @Published var librarySharingFilter: LibrarySharingFilter = .all {
+        didSet { UserDefaults.standard.set(librarySharingFilter.rawValue, forKey: "librarySharingFilter") }
+    }
+    @Published var reviewSharingFilter: ReviewSharingFilter = .all {
+        didSet { UserDefaults.standard.set(reviewSharingFilter.rawValue, forKey: "reviewSharingFilter") }
+    }
     @Published var selected = Set<String>() { didSet { refreshArchiveSpace() } }
     @Published var focusedID: String?
     @Published var player: AVPlayer?
@@ -115,6 +119,8 @@ final class AppModel: ObservableObject {
         hideUnsupported = UserDefaults.standard.object(forKey: "hideUnsupported") as? Bool ?? true
         hideProcessed = UserDefaults.standard.object(forKey: "hideProcessed") as? Bool ?? true
         replaceOriginals = UserDefaults.standard.bool(forKey: "replaceOriginals")
+        librarySharingFilter = UserDefaults.standard.string(forKey: "librarySharingFilter").flatMap(LibrarySharingFilter.init(rawValue:)) ?? .all
+        reviewSharingFilter = UserDefaults.standard.string(forKey: "reviewSharingFilter").flatMap(ReviewSharingFilter.init(rawValue:)) ?? .all
         sharingChanges = sharing.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         Task { await reloadHistory(); refreshArchiveSpace() }
         if CommandLine.arguments.contains("--demo") { loadDemo() }
@@ -150,6 +156,7 @@ final class AppModel: ObservableObject {
             (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) &&
             (!hideUnsupported || $0.unsupportedReason == nil) &&
             (!hideProcessed || (!processedIDs.contains($0.id) && !outputs.contains($0.id))) &&
+            librarySharingFilter.includes(sharing.observation(for: $0.id).state) &&
             (minimumSize == 0 || ($0.facts.bytes ?? 0) >= minimumSize)
         }.sorted { (ranks[$0.id] ?? .max) < (ranks[$1.id] ?? .max) }
     }
@@ -384,6 +391,7 @@ final class AppModel: ObservableObject {
                 } catch { notice = AppNotice(text: "\(url.lastPathComponent): \(error.localizedDescription)") }
             }
             videos = loaded; connected = false; demo = false; replaceOriginals = false
+            librarySharingFilter = .all
             selected.removeAll(); focusedID = nil; player = nil
             isLoading = false; activity = "\(loaded.count) local \(mediaMode.rawValue.lowercased()) · originals remain in place"
         }
@@ -468,15 +476,12 @@ final class AppModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { backupDirectory = url }
     }
 
-    func startBatch(keepOriginals: Bool = false) {
+    func startBatch() {
         guard !isBusy, !isInspecting, !demo, let journal else { return }
         let batch = selectedVideos.filter { $0.unsupportedReason == nil }
         guard !batch.isEmpty else { return }
-        if replaceOriginals && connected && !keepOriginals && !sharedLibraryReplacementAcknowledged {
-            sharedLibraryReplacementPrompt = true; return
-        }
         let settings = self.settings, photoSettings = self.photoSettings
-        let replace = replaceOriginals && connected && !keepOriginals, archive = backupDirectory
+        let replace = replaceOriginals && connected, archive = backupDirectory
         isBusy = true; overallProgress = 0; cancellation = CancellationFlag(); batchSummary = nil
         let flag = cancellation
         batchTask = Task {
@@ -583,13 +588,13 @@ final class AppModel: ObservableObject {
                         record.replacementModifiedAt = PhotosService.fetch(record.replacementID!)?.modificationDate
                         record.stage = .readyToDelete
                         try await journal.save(record)
-                        if replace && !record.requiresSharedLibraryReview { ready.append(record) }
+                        if replace { ready.append(record) }
                     } else {
                         record.stage = .keptOriginal; try await journal.save(record)
                     }
                     let saved = (record.originalBytes ?? 0) - (record.outputBytes ?? 0)
                     summary.completed += 1; summary.savedBytes += max(0, saved)
-                    statuses[video.id] = RowStatus(text: record.requiresSharedLibraryReview ? "Shared original kept · check Review" : "Copy ready · \(DisplayFormat.bytes(saved)) smaller")
+                    statuses[video.id] = RowStatus(text: "Copy ready · \(DisplayFormat.bytes(saved)) smaller")
                     selected.remove(video.id)
                 } catch {
                     if error is CancellationError { summary.interrupted += 1 } else { summary.failed += 1 }
@@ -639,10 +644,6 @@ final class AppModel: ObservableObject {
                             verified.sourceSharedLibrary = observation
                             try await journal.save(verified)
                         }
-                    }
-                    if verified.requiresSharedLibraryReview {
-                        statuses[record.sourceID] = RowStatus(text: "Shared original kept · check Review")
-                        continue
                     }
                 }
                 if let id = record.replacementID, let replacement = PhotosService.fetch(id),
@@ -694,17 +695,13 @@ final class AppModel: ObservableObject {
             if markReviewed { record.reviewDecision = .accepted }
             do { try await journal.save(record) }
             catch { notice = AppNotice(text: "Photos deleted the original and retained the compressed copy, but the history update could not be saved. Both local archives remain. Reconnect Photos and review this item before continuing. \(error.localizedDescription)") }
-            statuses[record.sourceID] = RowStatus(text: "Replaced · original archived locally")
+            statuses[record.sourceID] = RowStatus(text: record.sourceWasShared ? "Replaced · re-share copy from Review" : "Replaced · original archived locally")
             videos.removeAll { $0.id == record.sourceID }; selected.remove(record.sourceID)
             if focusedID == record.sourceID { player?.pause(); player = nil; focusedID = nil }
         }
     }
 
     func reloadHistory() async { if let journal { history = await journal.all() } }
-
-    func confirmAutomaticReplacement() {
-        sharedLibraryReplacementPrompt = false; sharedLibraryReplacementAcknowledged = true; startBatch()
-    }
 
     private func reconcileImportedCopies() async {
         guard let journal else { return }
@@ -727,6 +724,7 @@ final class AppModel: ObservableObject {
         mediaMode = .videos
         clearInspections()
         demo = true; connected = false; selected.removeAll(); player = nil; focusedID = nil
+        librarySharingFilter = .all
         let samples: [(String, Int, Int, Double, Int64, Bool)] = [
             ("A weekend by the sea.mov", 3840, 2160, 182, 1_480_000_000, true),
             ("Birthday candles.mov", 3840, 2160, 94, 810_000_000, true),

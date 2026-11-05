@@ -23,7 +23,10 @@ struct ReviewPrompt: Identifiable {
 
 extension AppModel {
     func openReview(_ record: OperationRecord? = nil) {
-        if let record { reviewFocusedID = record.id }
+        if let record {
+            if !reviewSharingMatches(record, filter: reviewSharingFilter) { reviewSharingFilter = .all }
+            reviewFocusedID = record.id
+        }
         else if reviewFocusedID == nil { reviewFocusedID = awaitingReview.first?.id ?? reviewRecords.first?.id }
         section = .review
         showHistory = false

@@ -60,7 +60,11 @@ public struct OperationRecord: Codable, Identifiable {
     }
 
     public var isPhotosOperation: Bool { !sourceID.hasPrefix("/") }
-    public var requiresSharedLibraryReview: Bool { sourceSharedLibrary?.state == .shared }
+    public var sourceWasShared: Bool { sourceSharedLibrary?.state == .shared }
+    public var reviewPhotosID: String? {
+        guard isPhotosOperation else { return nil }
+        return stage == .reverted ? (restoredOriginalID ?? sourceID) : replacementID
+    }
     public var kind: MediaKind { mediaKind ?? .video }
     public var outputIsLivePhoto: Bool { kind == .livePhoto && photoSettings?.convertLiveToStill != true }
     public var originalFileBytes: Int64? { originalBytes.map { $0 - (pairedVideoBytes ?? 0) } }

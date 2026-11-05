@@ -171,17 +171,38 @@ not prove the active library identity or iCloud synchronization. Metadata refres
 on connection, during review, periodically while idle, and before compression or
 automatic deletion. Hover over a label for the observation time and detail.
 
-**Detected shared originals are retained for Review even when automatic
-replacement is enabled.** The source observation is saved in the operation
-history. Review compares that result with the current copy's result and offers
-**Show copy in Photos**. Moving or restoring Shared Library placement still needs
-**Photos → Image → Move to Shared Library** before deleting the shared source.
-The same check applies to originals restored from an archive. See
+**Replace originals in Photos also applies to detected shared originals.**
+Once the smaller import, supported metadata, and archive pass their checks,
+macOS asks to delete the originals. There is no separate Shared Library approval
+or forced review hold. Copies can start in Personal Library, so the original's
+sharing observation is saved in history and remains visible in Review after
+replacement or restart. Leaving replacement off retains originals for review.
+
+Review highlights **Shared original replaced · re-share the copy** and offers
+**Show copy to re-share…**, which reveals that exact replacement in Photos.
+Choose **Photos → Image → Move to Shared Library**, then return to Review and
+**Refresh**. The app detects the new placement when available; the move itself
+is manual. The full original stays archived locally. Originals restored by a
+revert may need the same manual move. See
 [Apple's instructions](https://support.apple.com/guide/photos/pht9a3599aac/mac).
 
-Automatic replacement still asks once per app session whether to keep copies
-for review or proceed for other items; Unknown may include shared originals.
-Shared Album items remain protected.
+Both lists have independent, remembered library filters:
+
+- **Library:** All libraries / Shared Library / Personal Library / Unknown,
+  using current advisory metadata.
+- **Review → Original library:** All libraries / Shared originals / Personal
+  originals / Unknown originals, using the saved source observation where known.
+  Shared originals therefore still finds replacements currently in Personal
+  Library, even after the source was deleted.
+- **Review → Needs re-sharing:** shared originals whose replacement (or restored
+  original after a revert) is Personal or Unknown. This automatically shows all
+  copies, including accepted ones. A fresh Shared result removes the item from
+  this action queue while it remains in Shared originals. The filter is also
+  accessible in the toolbar when the list is hidden.
+
+Unknown is kept separate from Personal. Database results remain advisory;
+accepting a copy does not mark its sharing as restored. Shared Album items remain
+protected.
 When a tracked replacement's modification date changes, its original resources
 are compared against the archive with SHA-256 and its supported metadata is
 rechecked before removal. This allows an unchanged copy moved in Photos to be
