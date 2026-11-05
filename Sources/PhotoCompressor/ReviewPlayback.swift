@@ -17,7 +17,7 @@ final class ReviewPlayback: ObservableObject {
     @Published var duration = 0.0
     @Published var playing = false
     @Published var scrubbing = false
-    @Published var audio: ReviewAudio = .original { didSet { updateAudio() } }
+    @Published var audio: ReviewAudio = .compressed { didSet { updateAudio() } }
     private var loadID = UUID()
     private var seekID = UUID()
     private var seekTask: Task<Void, Never>?

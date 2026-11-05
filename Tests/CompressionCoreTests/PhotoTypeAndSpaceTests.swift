@@ -9,6 +9,34 @@ final class PhotoTypeAndSpaceTests: XCTestCase {
         XCTAssertTrue(PhotoTypeFilter.panoramas.includes(isLivePhoto: false, isPanorama: true))
         XCTAssertFalse(PhotoTypeFilter.panoramas.includes(isLivePhoto: true, isPanorama: false))
         XCTAssertTrue(PhotoTypeFilter.panoramas.includes(isLivePhoto: true, isPanorama: true))
+        XCTAssertTrue(PhotoTypeFilter.normal.includes(isLivePhoto: false, isPanorama: false))
+        XCTAssertFalse(PhotoTypeFilter.normal.includes(isLivePhoto: true, isPanorama: false))
+        XCTAssertFalse(PhotoTypeFilter.normal.includes(isLivePhoto: false, isPanorama: true))
+        XCTAssertFalse(PhotoTypeFilter.normal.includes(isLivePhoto: true, isPanorama: true))
+        XCTAssertFalse(PhotoTypeFilter.normal.includes(isLivePhoto: false, isPanorama: nil))
+        XCTAssertTrue(PhotoTypeFilter.all.includes(isLivePhoto: false, isPanorama: nil))
+    }
+
+    func testMultipleShownTypesAndEmptySelection() {
+        var filter = PhotoTypeFilter(types: [.normal, .livePhotos])
+        XCTAssertTrue(filter.includes(isLivePhoto: false, isPanorama: false))
+        XCTAssertTrue(filter.includes(isLivePhoto: true, isPanorama: false))
+        XCTAssertFalse(filter.includes(isLivePhoto: false, isPanorama: true))
+        filter.types.remove(.normal)
+        XCTAssertFalse(filter.includes(isLivePhoto: false, isPanorama: false))
+        filter.types.remove(.livePhotos)
+        XCTAssertFalse(filter.includes(isLivePhoto: true, isPanorama: false))
+        XCTAssertFalse(filter.includes(isLivePhoto: false, isPanorama: true))
+        XCTAssertEqual(PhotoTypeFilter(rawValue: filter.rawValue), filter, "An explicitly empty filter must survive restart")
+    }
+
+    func testSavedSingleChoiceFiltersMigrateAndCombinationsRoundTrip() {
+        XCTAssertEqual(PhotoTypeFilter(rawValue: "all"), .all)
+        XCTAssertEqual(PhotoTypeFilter(rawValue: "livePhotos"), .livePhotos)
+        XCTAssertEqual(PhotoTypeFilter(rawValue: "panoramas"), .panoramas)
+        let mixed = PhotoTypeFilter(types: [.normal, .panoramas])
+        XCTAssertEqual(PhotoTypeFilter(rawValue: mixed.rawValue), mixed)
+        XCTAssertNil(PhotoTypeFilter(rawValue: "unknownFutureType"))
     }
 
     func testSourcePanoramaAndLiveTypeSurviveConversionAndJournalReload() throws {

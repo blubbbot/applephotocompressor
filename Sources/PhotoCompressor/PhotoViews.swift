@@ -57,43 +57,72 @@ struct PhotoFilePreview: View {
     }
 }
 
-private struct NativeLivePhoto: NSViewRepresentable {
+struct NativeLivePhoto: NSViewRepresentable {
     let livePhoto: PHLivePhoto
     let playRequest: Int
     let muted: Bool
-    final class Coordinator { var played = 0 }
+    var stopRequest = 0
+    var onPlaybackChanged: ((Bool) -> Void)? = nil
+    final class Coordinator: NSObject, PHLivePhotoViewDelegate {
+        var played = 0
+        var stopped = 0
+        var onPlaybackChanged: ((Bool) -> Void)?
+        func livePhotoView(_ livePhotoView: PHLivePhotoView, willBeginPlaybackWith playbackStyle: PHLivePhotoViewPlaybackStyle) {
+            DispatchQueue.main.async { [weak self] in self?.onPlaybackChanged?(true) }
+        }
+        func livePhotoView(_ livePhotoView: PHLivePhotoView, didEndPlaybackWith playbackStyle: PHLivePhotoViewPlaybackStyle) {
+            DispatchQueue.main.async { [weak self] in self?.onPlaybackChanged?(false) }
+        }
+    }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> PHLivePhotoView {
         let view = PHLivePhotoView(); view.contentMode = .aspectFit
+        view.delegate = context.coordinator
+        context.coordinator.onPlaybackChanged = onPlaybackChanged
         view.livePhoto = livePhoto; view.isMuted = muted
         return view
     }
     func updateNSView(_ view: PHLivePhotoView, context: Context) {
-        if view.livePhoto !== livePhoto { view.livePhoto = livePhoto }
+        context.coordinator.onPlaybackChanged = onPlaybackChanged
+        if view.livePhoto !== livePhoto { view.stopPlayback(); view.livePhoto = livePhoto; context.coordinator.played = 0; context.coordinator.stopped = 0 }
         view.isMuted = muted
-        if context.coordinator.played != playRequest {
+        if context.coordinator.stopped != stopRequest {
+            context.coordinator.stopped = stopRequest; context.coordinator.played = playRequest
+            view.stopPlayback()
+        } else if context.coordinator.played != playRequest {
             context.coordinator.played = playRequest; view.startPlayback(with: .full)
         }
     }
-    static func dismantleNSView(_ view: PHLivePhotoView, coordinator: Coordinator) { view.stopPlayback() }
+    static func dismantleNSView(_ view: PHLivePhotoView, coordinator: Coordinator) {
+        coordinator.onPlaybackChanged = nil; view.delegate = nil; view.stopPlayback()
+    }
 }
 
 struct PhotoComparison: View {
     let record: OperationRecord
     let height: CGFloat
     @State private var playRequest = 0
+    @State private var audio: ReviewAudio = .compressed
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 16) {
                 pane(title: record.kind == .livePhoto ? "Original Live Photo" : "Original", path: record.backupPath,
                      facts: record.photoFacts, bytes: record.originalBytes,
-                     motion: record.kind == .livePhoto ? record.pairedVideoPath : nil, muted: false)
+                     motion: record.kind == .livePhoto ? record.pairedVideoPath : nil, muted: audio != .original)
                 pane(title: record.outputIsLivePhoto ? "Compressed Live Photo" : "Compressed still photo", path: record.outputPath,
                      facts: record.outputPhotoFacts, bytes: record.outputBytes,
-                     motion: record.outputIsLivePhoto ? record.pairedVideoPath : nil, muted: true)
+                     motion: record.outputIsLivePhoto ? record.pairedVideoPath : nil, muted: audio != .compressed)
             }
             if record.kind == .livePhoto {
-                Button(record.outputIsLivePhoto ? "Play both Live Photos (original audio)" : "Play original Live Photo") { playRequest += 1 }
+                HStack {
+                    Button(record.outputIsLivePhoto ? "Play both Live Photos" : "Play original Live Photo") { playRequest += 1 }
+                    Spacer()
+                    Picker("Listen to", selection: $audio) {
+                        Text("Original audio").tag(ReviewAudio.original)
+                        Text(record.outputIsLivePhoto ? "Compressed audio" : "Compressed still (silent)").tag(ReviewAudio.compressed)
+                        Text("Muted").tag(ReviewAudio.muted)
+                    }.frame(width: 240).controlSize(.small)
+                }
                 Text(record.outputIsLivePhoto ? "The original motion file, timing, and sound are retained byte for byte. Only the still image is re-encoded." : "Converted to a still photo as requested. The compressed Photos copy has no motion or sound; the full original pair remains archived.")
                     .font(.caption).foregroundStyle(record.outputIsLivePhoto ? Color.secondary : .orange)
             }
@@ -112,9 +141,6 @@ struct PhotoComparison: View {
 struct PhotoDetailView: View {
     @EnvironmentObject private var model: AppModel
     let photo: LibraryVideo
-    @State private var image: NSImage?
-    @State private var error: String?
-    @State private var previewRequest = 0
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
                 HStack {
@@ -122,18 +148,9 @@ struct PhotoDetailView: View {
                     Spacer()
                     if let id = photo.asset?.localIdentifier { Button("Show in Photos") { model.showInPhotos(id: id) } }
                 }
-                ZStack {
-                    Color.black
-                    if let url = photo.fileURL { PhotoFilePreview(url: url) }
-                    else if let image { Image(nsImage: image).resizable().scaledToFit() }
-                    else if let error {
-                        VStack(spacing: 10) {
-                            Text(error).foregroundStyle(.white).font(.caption)
-                            Button("Retry preview") { previewRequest += 1 }
-                        }.padding()
-                    }
-                    else { ProgressView().tint(.white) }
-                }.frame(height: 320).clipShape(RoundedRectangle(cornerRadius: 12))
+                if let url = photo.fileURL {
+                    PhotoFilePreview(url: url).frame(height: 320).clipShape(RoundedRectangle(cornerRadius: 12))
+                } else { LibraryPhotoPreview(photo: photo).id(photo.id) }
                 Text(photo.name).font(.title2.weight(.semibold)).textSelection(.enabled)
                 Text("\(photo.facts.width) × \(photo.facts.height) · \(photo.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending")")
                     .font(.callout).foregroundStyle(.secondary)
@@ -157,13 +174,6 @@ struct PhotoDetailView: View {
                 }
                 if let status = model.statuses[photo.id] { Text(status.text).foregroundStyle(status.failed ? Color.orange : .secondary) }
         }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: "\(photo.id)-\(previewRequest)") {
-            image = nil; error = nil
-            if let asset = photo.asset {
-                do { let preview = try await PhotosService.photoPreview(asset); if !Task.isCancelled { image = preview } }
-                catch { if !Task.isCancelled { self.error = error.localizedDescription } }
-            }
-        }
     }
 }
 

@@ -171,7 +171,7 @@ extension AppModel {
     var filteredReviewRecords: [OperationRecord] {
         reviewRecords.filter {
             reviewSharingMatches($0, filter: reviewSharingFilter) &&
-            (mediaMode != .photos || reviewPhotoTypeFilter.includes(isLivePhoto: $0.kind == .livePhoto, isPanorama: $0.sourceIsPanorama == true))
+            (mediaMode != .photos || reviewPhotoTypeFilter.includes(isLivePhoto: $0.kind == .livePhoto, isPanorama: $0.sourceIsPanorama))
         }
     }
     func needsSharing(_ record: OperationRecord) -> Bool { reviewSharingMatches(record, filter: .needsSharing) }

@@ -447,3 +447,49 @@ latency, the native subtype filters, expanded toolbar layout, and live low-disk
 rendering remain unverified. Universal-build and extracted ZIP checks validate
 both architectures, privacy descriptions, signature, icon resources, version,
 and SQLite linkage; public download verification compares the SHA-256 checksum.
+
+### 0.2.5 — Live Photo motion previews and selectable photo types
+
+The Library detail preview now requests a native PHLivePhoto representation of
+the selected Live Photo, with its current Photos appearance. Play motion / Stop
+motion and Mute control the native view. It does not auto-play. Requests may
+fetch preview resources from iCloud; progress, Cancel, and Retry are provided.
+The view reloads when the selected asset's modification date changes. Failed
+motion requests attempt a still-image fallback without hiding the motion error.
+Leaving the view cancels its request and stops playback.
+
+PhotoKit requests use a locked, exactly-once continuation bridge. It handles
+cancellation before attachment, cancellation before a request ID is returned,
+synchronous completion, repeated/late callbacks, and completion/cancel races.
+Final errors are handled before degraded-result filtering. The same cancellation
+bridge now protects archive-based Live Photo pairing requests and library still
+previews. No PhotoKit changes/imports/deletions are performed by preview loading.
+Native playback delegates update the Library play/stop state; dismantling the
+view clears callbacks and stops playback.
+
+The photo-types menu lets Library and Review independently select Normal photos,
+Live Photos, and Panoramas. Normal excludes both special subtypes; selected
+categories are combined, and an empty selection is allowed. All and Normal-only
+shortcuts are available. Old all/livePhotos/panoramas preferences migrate to the
+new stored selection. Original type still governs Review after Live-to-still
+conversion. Old Review entries without a panorama flag are included by All but
+are not incorrectly labelled Normal when their panorama status is unknown.
+
+Review defaults to compressed audio for videos and paired Live Photos. Original
+and Muted remain selectable. A compressed still has no audio; its original Live
+motion stays muted by default until Original audio is explicitly selected.
+
+The full **55-test suite** passed on Intel. New checks cover saved-filter
+migration, mixed/empty selections, Normal-only exclusion and unknown legacy
+metadata, catalog filtering, and callback completion/cancellation races. The
+existing AVPlayer playback test now checks compressed-default mute state and
+switching back to original/muted. Native PHLivePhoto validation of a generated
+still/movie pair still passes before and after HEIC re-encoding, with unchanged
+motion bytes. Focused preview/filter/player/pairing checks also pass.
+
+No app UI or actual Photos library/database was opened. Actual Library motion
+playback, cloud fetching, interactive native playback controls, and the menu
+layout remain unverified live, following the prior instruction to proceed
+without computer-use testing. Universal-build and extracted-package checks
+validate signatures, privacy strings, icons, version, architectures, SQLite
+linkage, and the public download checksum.

@@ -34,6 +34,8 @@ final class ReviewPlaybackTests: XCTestCase {
         let ready = await waitUntil { playback.canCompare }
         XCTAssertTrue(ready)
         let original = try XCTUnwrap(playback.original), compressed = try XCTUnwrap(playback.compressed)
+        XCTAssertEqual(playback.audio, .compressed)
+        XCTAssertTrue(original.isMuted); XCTAssertFalse(compressed.isMuted)
         XCTAssertFalse(original.automaticallyWaitsToMinimizeStalling, "Host-clock playback requires automatic waiting to be disabled")
         XCTAssertFalse(compressed.automaticallyWaitsToMinimizeStalling)
         guard !original.automaticallyWaitsToMinimizeStalling, !compressed.automaticallyWaitsToMinimizeStalling else { return }
@@ -46,6 +48,8 @@ final class ReviewPlaybackTests: XCTestCase {
         XCTAssertEqual(original.rate, 0); XCTAssertEqual(compressed.rate, 0)
         playback.audio = .compressed
         XCTAssertTrue(original.isMuted); XCTAssertFalse(compressed.isMuted)
+        playback.audio = .original
+        XCTAssertFalse(original.isMuted); XCTAssertTrue(compressed.isMuted)
         playback.audio = .muted
         XCTAssertTrue(original.isMuted); XCTAssertTrue(compressed.isMuted)
     }

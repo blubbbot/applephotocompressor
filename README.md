@@ -224,12 +224,30 @@ shared membership or iCloud synchronization.
 
 ### Photos and Live Photos
 
-Photo mode offers **Photo type → All photos / Live Photos / Panoramas** in the
-Library list, with an independent filter in Review. Live/panorama classification
-uses PhotoKit subtype metadata, without downloading originals. Review filters
-by the original type, so Live Photos explicitly converted to stills remain in
-the Live Photos filter. Panorama flags are saved with new operations; older
-journal entries without that flag cannot be classified as panoramas in Review.
+Photo mode has a **photo-types menu** in Library and Review. Independently check
+**Normal photos**, **Live Photos**, and **Panoramas**, or use **Normal photos only**
+and **Show all photo types**. Normal excludes both Live Photos and panoramas;
+checked categories are combined. You can also deselect every type, then restore
+All from the empty-list controls. Library and Review remember separate selections;
+preferences from the earlier single-choice filter migrate automatically.
+Classification uses PhotoKit subtype metadata without downloading originals.
+Review filters by the original type, so Live Photos converted to stills remain
+in the Live category. Panorama flags are saved with new operations; older entries
+without that flag cannot be classified as panoramas in Review. They also stay
+out of Normal-only until their type is known; All still includes them.
+
+Selecting a Live Photo in Library requests its current native **motion preview**.
+Click **Play motion** to play picture and sound; use **Stop motion** or **Mute** as
+needed. The preview does not auto-play. Loading may fetch preview media from
+iCloud; progress and Cancel appear while loading. Browsing away cancels the
+PhotoKit request and stops playback. Failed motion requests retain a still
+preview when available and offer Retry. Refreshing an edited asset reloads its
+preview. These are read-only preview requests, separate from archiving/import.
+
+**Compressed audio is the default in Review**, for both videos and paired Live
+Photos. The Listen to picker still offers Original and Muted. When a Live Photo
+was converted to a still, the compressed side is silent by default; choosing
+Original audio lets you hear the archived motion instead.
 
 Large-library sorting and filtering run on cancellable background snapshots;
 views reuse the cached result. Processed/replacement ID sets and sort keys are

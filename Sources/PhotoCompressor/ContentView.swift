@@ -146,10 +146,7 @@ struct ContentView: View {
                     TextField("Search \(model.mediaMode.rawValue.lowercased())", text: $model.search).textFieldStyle(.plain)
                 }.padding(9).background(surface, in: RoundedRectangle(cornerRadius: 8))
                 if model.mediaMode == .photos {
-                    Picker("Photo type", selection: $model.photoTypeFilter) {
-                        ForEach(PhotoTypeFilter.allCases) { Text($0.title).tag($0) }
-                    }.pickerStyle(.menu).controlSize(.small)
-                        .help("Uses Photos' Live Photo and panorama metadata; no original download is needed.")
+                    PhotoTypeFilterMenu(selection: $model.photoTypeFilter)
                 }
                 if model.connected {
                     Picker("Library", selection: $model.librarySharingFilter) {

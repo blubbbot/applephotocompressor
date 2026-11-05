@@ -132,10 +132,7 @@ struct ReviewView: View {
     }
 
     private var photoTypeFilter: some View {
-        Picker("Photo type", selection: $model.reviewPhotoTypeFilter) {
-            ForEach(PhotoTypeFilter.allCases) { Text($0.title).tag($0) }
-        }.pickerStyle(.menu).controlSize(.small)
-            .help("Filter by the original photo type, including Live Photos converted to stills.")
+        PhotoTypeFilterMenu(selection: $model.reviewPhotoTypeFilter)
     }
 
     private var sidebar: some View {

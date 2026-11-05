@@ -30,24 +30,58 @@ extension PhotosService {
     }
 
     static func livePhoto(photo: URL, motion: URL) async throws -> PHLivePhoto {
-        try await withCheckedThrowingContinuation { continuation in
-            PHLivePhoto.request(withResourceFileURLs: [photo, motion], placeholderImage: nil, targetSize: .zero, contentMode: .aspectFit) { livePhoto, info in
-                if (info[PHLivePhotoInfoIsDegradedKey] as? Bool) == true { return }
-                if let livePhoto { continuation.resume(returning: livePhoto) }
-                else { continuation.resume(throwing: info[PHLivePhotoInfoErrorKey] as? Error ?? MediaError.invalid("Live Photo pairing validation failed. The original and its motion are retained.")) }
+        let request = PhotoPreviewRequest<PHLivePhoto>()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                guard request.attach(continuation) else { return }
+                let id = PHLivePhoto.request(withResourceFileURLs: [photo, motion], placeholderImage: nil, targetSize: .zero, contentMode: .aspectFit) { livePhoto, info in
+                    if (info[PHLivePhotoInfoCancelledKey] as? Bool) == true { request.finish(.failure(CancellationError())); return }
+                    if let error = info[PHLivePhotoInfoErrorKey] as? Error { request.finish(.failure(error)); return }
+                    if (info[PHLivePhotoInfoIsDegradedKey] as? Bool) == true { return }
+                    if let livePhoto { request.finish(.success(livePhoto)) }
+                    else { request.finish(.failure(info[PHLivePhotoInfoErrorKey] as? Error ?? MediaError.invalid("Live Photo pairing validation failed. The original and its motion are retained."))) }
+                }
+                request.setCancellation { PHLivePhoto.cancelRequest(withRequestID: id) }
             }
-        }
+        }, onCancel: { request.cancel() })
+    }
+
+    static func livePhotoPreview(_ asset: PHAsset, progress: @escaping @Sendable (Double) -> Void) async throws -> PHLivePhoto {
+        let request = PhotoPreviewRequest<PHLivePhoto>()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                guard request.attach(continuation) else { return }
+                let options = PHLivePhotoRequestOptions()
+                options.version = .current; options.deliveryMode = .highQualityFormat; options.isNetworkAccessAllowed = true
+                options.progressHandler = { value, _, _, _ in progress(value) }
+                let id = PHImageManager.default().requestLivePhoto(for: asset, targetSize: CGSize(width: 2000, height: 2000), contentMode: .aspectFit, options: options) { livePhoto, info in
+                    if (info?[PHImageCancelledKey] as? Bool) == true { request.finish(.failure(CancellationError())); return }
+                    if let error = info?[PHImageErrorKey] as? Error { request.finish(.failure(error)); return }
+                    if (info?[PHImageResultIsDegradedKey] as? Bool) == true { return }
+                    if let livePhoto { request.finish(.success(livePhoto)) }
+                    else { request.finish(.failure(info?[PHImageErrorKey] as? Error ?? MediaError.invalid("Photos could not load motion for this Live Photo. Retry or open it in Photos."))) }
+                }
+                request.setCancellation { PHImageManager.default().cancelImageRequest(id) }
+            }
+        }, onCancel: { request.cancel() })
     }
 
     static func photoPreview(_ asset: PHAsset) async throws -> NSImage {
-        try await withCheckedThrowingContinuation { continuation in
-            let options = PHImageRequestOptions(); options.isNetworkAccessAllowed = true
-            options.deliveryMode = .highQualityFormat
-            PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: 2000, height: 2000), contentMode: .aspectFit, options: options) { image, info in
-                if (info?[PHImageResultIsDegradedKey] as? Bool) == true { return }
-                if let image { continuation.resume(returning: image) }
-                else { continuation.resume(throwing: info?[PHImageErrorKey] as? Error ?? MediaError.invalid("Photos could not load this photo preview.")) }
+        let request = PhotoPreviewRequest<NSImage>()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                guard request.attach(continuation) else { return }
+                let options = PHImageRequestOptions(); options.isNetworkAccessAllowed = true
+                options.deliveryMode = .highQualityFormat
+                let id = PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: 2000, height: 2000), contentMode: .aspectFit, options: options) { image, info in
+                    if (info?[PHImageCancelledKey] as? Bool) == true { request.finish(.failure(CancellationError())); return }
+                    if let error = info?[PHImageErrorKey] as? Error { request.finish(.failure(error)); return }
+                    if (info?[PHImageResultIsDegradedKey] as? Bool) == true { return }
+                    if let image { request.finish(.success(image)) }
+                    else { request.finish(.failure(info?[PHImageErrorKey] as? Error ?? MediaError.invalid("Photos could not load this photo preview."))) }
+                }
+                request.setCancellation { PHImageManager.default().cancelImageRequest(id) }
             }
-        }
+        }, onCancel: { request.cancel() })
     }
 }

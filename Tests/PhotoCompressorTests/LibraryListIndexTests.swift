@@ -3,6 +3,15 @@ import CompressionCore
 @testable import PhotoCompressor
 
 final class LibraryListIndexTests: XCTestCase {
+    func testNormalOnlyAndMixedTypeSelectionsUseCachedCatalogMetadata() throws {
+        let items = [item("normal", bytes: 400), item("live", bytes: 300, live: true), item("pano", bytes: 200, panorama: true)]
+        var query = LibraryListIndex.Query(); query.photoFilter = .normal
+        let normal = try LibraryListIndex.build(items, query: query, order: .init(), resort: true, applyImmediately: true)
+        XCTAssertEqual(normal.items.map(\.id), ["normal"])
+        query.photoFilter.types.insert(.panoramas)
+        let mixed = try LibraryListIndex.build(items, query: query, order: normal.order, resort: false, applyImmediately: false)
+        XCTAssertEqual(mixed.items.map(\.id), ["normal", "pano"])
+    }
     func testMeasurementsKeepNavigationOrderUntilCommitAndFilteringKeepsHiddenRanks() throws {
         var items = [item("a", bytes: 300, panorama: true), item("b", bytes: 200), item("c", bytes: 100, panorama: true)]
         let first = try LibraryListIndex.build(items, query: .init(), order: .init(), resort: true, applyImmediately: false)
