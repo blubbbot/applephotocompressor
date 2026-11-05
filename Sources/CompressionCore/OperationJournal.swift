@@ -45,6 +45,7 @@ public struct OperationRecord: Codable, Identifiable {
     public var pairedVideoPath: String?
     public var pairedVideoBytes: Int64?
     public var sourceSharedLibrary: SharedLibraryObservation?
+    public var sourceIsPanorama: Bool?
     public var settings: CompressionSettings
 
     public init(sourceID: String, sourceName: String, backupPath: String, outputPath: String, settings: CompressionSettings) {

@@ -17,6 +17,12 @@ struct LibraryVideo: Identifiable {
     var isSlowMotion = false
     var kind: MediaKind = .video
     var photoFormat: String?
+    var isPanorama = false
+
+    var sharingIdentity: SharedLibraryAssetIdentity? {
+        guard asset != nil else { return nil }
+        return SharedLibraryAssetIdentity(localIdentifier: id, filename: name, isVideo: !kind.isPhoto, creationDate: date == .distantPast ? nil : date)
+    }
 
     var hasInspectedFacts: Bool { factsAreMeasured || fileURL != nil || isDemo }
 }
@@ -123,33 +129,51 @@ enum PhotosService {
         guard status == .authorized else { throw MediaError.invalid("Full Photos access is needed to browse and replace videos. Enable it in System Settings → Privacy & Security → Photos.") }
     }
 
-    static func videos(photos: Bool = false) async -> [LibraryVideo] {
-        await Task.detached(priority: .userInitiated) {
+    static func videos(photos: Bool = false, previous: [LibraryVideo] = [], history: [OperationRecord] = []) async throws -> [LibraryVideo] {
+        let worker = Task.detached(priority: .userInitiated) {
             let options = PHFetchOptions()
             options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
             options.includeHiddenAssets = false
             let assets = PHAsset.fetchAssets(with: photos ? .image : .video, options: options)
             var slowMotionIDs = Set<String>()
-            let slowMotionAlbums = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumSlomoVideos, options: nil)
-            slowMotionAlbums.enumerateObjects { album, _, _ in
-                PHAsset.fetchAssets(in: album, options: nil).enumerateObjects { asset, _, _ in
-                    slowMotionIDs.insert(asset.localIdentifier)
+            if !photos {
+                let slowMotionAlbums = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumSlomoVideos, options: nil)
+                slowMotionAlbums.enumerateObjects { album, _, stop in
+                    if Task.isCancelled { stop.pointee = true; return }
+                    PHAsset.fetchAssets(in: album, options: nil).enumerateObjects { asset, _, stop in
+                        if Task.isCancelled { stop.pointee = true; return }
+                        slowMotionIDs.insert(asset.localIdentifier)
+                    }
                 }
             }
+            let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
+            let historyByID = Dictionary(history.map { ($0.sourceID, $0) }, uniquingKeysWith: { first, _ in first })
             var result: [LibraryVideo] = []
-            assets.enumerateObjects { asset, _, _ in
-                let resources = PHAssetResource.assetResources(for: asset)
-                let original = resources.first(where: { $0.type == (photos ? .photo : .video) })
-                let slowMotion = asset.mediaSubtypes.contains(.videoHighFrameRate) || slowMotionIDs.contains(asset.localIdentifier)
-                let reason = slowMotion ? "Slo-mo protected: the captured frames and slow-motion timing are kept by excluding this video from compression." : protectionReason(for: asset, resources: resources)
-                result.append(LibraryVideo(id: asset.localIdentifier, name: original?.originalFilename ?? "Video", asset: asset, fileURL: nil,
-                    facts: VideoFacts(width: asset.pixelWidth, height: asset.pixelHeight, duration: asset.duration),
-                    date: asset.creationDate ?? .distantPast, unsupportedReason: reason, isSlowMotion: slowMotion,
-                    kind: photos ? (asset.mediaSubtypes.contains(.photoLive) ? .livePhoto : .photo) : .video,
-                    photoFormat: photos ? original?.uniformTypeIdentifier : nil))
+            result.reserveCapacity(assets.count)
+            assets.enumerateObjects { asset, _, stop in
+                if Task.isCancelled { stop.pointee = true; return }
+                autoreleasepool {
+                    let resources = PHAssetResource.assetResources(for: asset)
+                    let original = resources.first(where: { $0.type == (photos ? .photo : .video) })
+                    let slowMotion = asset.mediaSubtypes.contains(.videoHighFrameRate) || slowMotionIDs.contains(asset.localIdentifier)
+                    let reason = slowMotion ? "Slo-mo protected: the captured frames and slow-motion timing are kept by excluding this video from compression." : protectionReason(for: asset, resources: resources)
+                    var item = LibraryVideo(id: asset.localIdentifier, name: original?.originalFilename ?? (photos ? "Photo" : "Video"), asset: asset, fileURL: nil,
+                        facts: VideoFacts(width: asset.pixelWidth, height: asset.pixelHeight, duration: asset.duration),
+                        date: asset.creationDate ?? .distantPast, unsupportedReason: reason, isSlowMotion: slowMotion,
+                        kind: photos ? (asset.mediaSubtypes.contains(.photoLive) ? .livePhoto : .photo) : .video,
+                        photoFormat: photos ? original?.uniformTypeIdentifier : nil, isPanorama: asset.mediaSubtypes.contains(.photoPanorama))
+                    if let old = previousByID[item.id], old.asset?.modificationDate == asset.modificationDate, old.hasInspectedFacts {
+                        item.facts = old.facts; item.factsAreMeasured = true
+                    } else if let record = historyByID[item.id], record.sourceModifiedAt == asset.modificationDate, let facts = record.sourceFacts {
+                        item.facts = facts; item.factsAreMeasured = true
+                    }
+                    result.append(item)
+                }
             }
+            try Task.checkCancellation()
             return result
-        }.value
+        }
+        return try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
     }
 
     static func protectionReason(for asset: PHAsset, resources: [PHAssetResource]? = nil) -> String? {

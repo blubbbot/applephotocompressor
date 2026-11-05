@@ -18,6 +18,7 @@ final class SharedLibraryController: ObservableObject {
     // Preserve shared evidence for the post-replacement Review hint if a later
     // metadata read is temporarily unavailable.
     private var lastKnownShared: [String: SharedLibraryObservation] = [:]
+    private var refreshRevision = UUID()
 
     init() {
         enabled = UserDefaults.standard.bool(forKey: "sharedLibraryDetectionEnabled")
@@ -74,6 +75,28 @@ final class SharedLibraryController: ObservableObject {
         refreshTask = Task { _ = await inspect(assets) }
     }
 
+    func refresh(identities: [SharedLibraryAssetIdentity], extraIDs: [String], force: Bool = false) {
+        guard enabled, library != nil, force || Date().timeIntervalSince(lastRefresh) > 30 else { return }
+        refreshTask?.cancel()
+        let token = UUID(); refreshRevision = token
+        refreshTask = Task {
+            // Fetch only history assets missing from the already-indexed list.
+            // Resource enumeration and PhotoKit fetching never run on the UI actor.
+            let worker = Task.detached(priority: .utility) {
+                var result = Dictionary(identities.map { ($0.localIdentifier, $0) }, uniquingKeysWith: { first, _ in first })
+                let missing = Set(extraIDs).subtracting(result.keys)
+                PHAsset.fetchAssets(withLocalIdentifiers: Array(missing), options: nil).enumerateObjects { asset, _, stop in
+                    if Task.isCancelled { stop.pointee = true; return }
+                    if let identity = Self.identity(asset) { result[identity.localIdentifier] = identity }
+                }
+                return Array(result.values)
+            }
+            let assets = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard !Task.isCancelled, refreshRevision == token else { return }
+            _ = await inspect(assets)
+        }
+    }
+
     /// A fresh read before compression/deletion does not rely on cached badges.
     @discardableResult
     func inspect(_ assets: [SharedLibraryAssetIdentity]) async -> [String: SharedLibraryObservation] {
@@ -105,7 +128,7 @@ final class SharedLibraryController: ObservableObject {
         }
     }
 
-    static func identity(_ asset: PHAsset) -> SharedLibraryAssetIdentity? {
+    nonisolated static func identity(_ asset: PHAsset) -> SharedLibraryAssetIdentity? {
         let video = asset.mediaType == .video
         guard video || asset.mediaType == .image,
               let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == (video ? .video : .photo) }) else { return nil }
@@ -124,10 +147,9 @@ extension AppModel {
 
     func refreshSharing(force: Bool = false) {
         guard connected, !demo, sharing.enabled else { return }
-        var assets = Dictionary(uniqueKeysWithValues: videos.compactMap { video in video.asset.map { ($0.localIdentifier, $0) } })
+        let identities = videos.compactMap(\.sharingIdentity)
         let ids = history.flatMap { [$0.sourceID, $0.replacementID, $0.restoredOriginalID].compactMap { $0 } }
-        PHAsset.fetchAssets(withLocalIdentifiers: Array(Set(ids).subtracting(assets.keys)), options: nil).enumerateObjects { asset, _, _ in assets[asset.localIdentifier] = asset }
-        sharing.refresh(assets.values.compactMap(SharedLibraryController.identity), force: force)
+        sharing.refresh(identities: identities, extraIDs: ids, force: force)
     }
 
     func sourceSharing(_ record: OperationRecord) -> SharedLibraryObservation? {
@@ -146,6 +168,11 @@ extension AppModel {
                                hasPhotosTarget: record.reviewPhotosID != nil)
     }
 
-    var filteredReviewRecords: [OperationRecord] { reviewRecords.filter { reviewSharingMatches($0, filter: reviewSharingFilter) } }
+    var filteredReviewRecords: [OperationRecord] {
+        reviewRecords.filter {
+            reviewSharingMatches($0, filter: reviewSharingFilter) &&
+            (mediaMode != .photos || reviewPhotoTypeFilter.includes(isLivePhoto: $0.kind == .livePhoto, isPanorama: $0.sourceIsPanorama == true))
+        }
+    }
     func needsSharing(_ record: OperationRecord) -> Bool { reviewSharingMatches(record, filter: .needsSharing) }
 }

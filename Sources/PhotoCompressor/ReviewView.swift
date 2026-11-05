@@ -36,6 +36,9 @@ struct ReviewView: View {
                         if model.reviewSharingFilter != .all {
                             Button("Show all libraries") { model.reviewSharingFilter = .all }
                         }
+                        if model.mediaMode == .photos && model.reviewPhotoTypeFilter != .all {
+                            Button("Show all photo types") { model.reviewPhotoTypeFilter = .all }
+                        }
                         if !showAll && !model.filteredReviewRecords.isEmpty {
                             Button("Show reviewed copies") { showAll = true }
                         }
@@ -75,6 +78,7 @@ struct ReviewView: View {
             }
             .keyboardShortcut("s", modifiers: [.command, .control])
             .help(showsSidebar ? "Hide the video list" : "Show the video list")
+            .labelStyle(.iconOnly)
             HStack(spacing: 10) {
                 Button { navigate(-1) } label: { Image(systemName: "chevron.left") }
                     .disabled(focusedIndex == nil || focusedIndex == 0)
@@ -89,11 +93,14 @@ struct ReviewView: View {
                 Menu {
                     reviewFilter
                     sharingFilter
+                    if model.mediaMode == .photos { photoTypeFilter }
                 } label: { Text(model.reviewSharingFilter == .all ? (showAll ? "All copies" : "To review") : model.reviewSharingFilter.title) }
                 .menuStyle(.borderlessButton).fixedSize()
             }
             Spacer(minLength: 12)
             if model.reviewPreviewExpanded, let record = focused {
+                if record.isPhotosOperation { SharedLibraryToolbarHint(record: record).environmentObject(model) }
+                DiskSpaceIndicator().environmentObject(model)
                 reviewActions(record, compact: true)
             }
             Button {
@@ -102,6 +109,7 @@ struct ReviewView: View {
                 Label(model.reviewPreviewExpanded ? "Restore layout" : "Expand previews",
                       systemImage: model.reviewPreviewExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
             }.disabled(focused == nil && !model.reviewPreviewExpanded)
+                .labelStyle(.iconOnly)
                 .help(model.reviewPreviewExpanded ? "Restore the list and review details" : "Use the window for the comparison; hide the list and longer details")
         }
         .buttonStyle(.borderless).controlSize(.small)
@@ -123,12 +131,20 @@ struct ReviewView: View {
             .help("Uses the original's saved library status. Needs re-sharing includes shared originals whose current copy is Personal or Unknown, including accepted copies.")
     }
 
+    private var photoTypeFilter: some View {
+        Picker("Photo type", selection: $model.reviewPhotoTypeFilter) {
+            ForEach(PhotoTypeFilter.allCases) { Text($0.title).tag($0) }
+        }.pickerStyle(.menu).controlSize(.small)
+            .help("Filter by the original photo type, including Live Photos converted to stills.")
+    }
+
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Compressed \(model.mediaMode.rawValue.lowercased())").font(.headline)
                 reviewFilter.pickerStyle(.segmented).labelsHidden()
                 sharingFilter
+                if model.mediaMode == .photos { photoTypeFilter }
                 if model.reviewSharingFilter == .needsSharing {
                     Text("Shared originals whose Photos replacement is Personal or Unknown. Includes accepted copies.")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -142,6 +158,9 @@ struct ReviewView: View {
                         .foregroundStyle(.secondary).multilineTextAlignment(.center)
                     if !model.filteredReviewRecords.isEmpty && !showAll { Button("Show reviewed copies") { showAll = true } }
                     if model.reviewSharingFilter != .all { Button("Show all libraries") { model.reviewSharingFilter = .all } }
+                    if model.mediaMode == .photos && model.reviewPhotoTypeFilter != .all {
+                        Button("Show all photo types") { model.reviewPhotoTypeFilter = .all }
+                    }
                     if !model.reviewRecords.isEmpty && (!model.sharing.enabled || model.sharing.library == nil) {
                         Button("Set up sharing detection…") { model.chooseSharingLibrary() }.disabled(model.isBusy)
                     }
@@ -180,7 +199,7 @@ struct ReviewView: View {
         GeometryReader { viewport in
             let padding: CGFloat = model.reviewPreviewExpanded ? 16 : 24
             let paneWidth = max(1, (viewport.size.width - padding * 2 - 16) / 2)
-            let reserved: CGFloat = record.isPhotosOperation ? 300 : 220
+            let reserved: CGFloat = record.kind == .photo ? 150 : 220
             let previewHeight = model.reviewPreviewExpanded ? max(140, viewport.size.height - reserved) : paneWidth * 10 / 16
             ScrollView {
             VStack(alignment: .leading, spacing: model.reviewPreviewExpanded ? 12 : 18) {
@@ -197,7 +216,7 @@ struct ReviewView: View {
                         Label("Archive in Finder", systemImage: "folder")
                     }
                 }
-                if record.isPhotosOperation {
+                if record.isPhotosOperation && !model.reviewPreviewExpanded {
                     SharedLibraryNotice(replacementID: record.reviewPhotosID,
                                         compact: model.reviewPreviewExpanded, restoredOriginal: record.stage == .reverted, record: record).environmentObject(model)
                 }
@@ -320,7 +339,7 @@ struct ReviewView: View {
                 if record.reviewDecision == .accepted {
                     Label("Accepted", systemImage: "checkmark.circle.fill").foregroundStyle(accent)
                 } else if record.stage != .reverting {
-                    Button(acceptTitle(record)) { playback.stop(); model.acceptReview(record.id) }
+                    Button(compact ? (record.isDeletionCandidate ? "Accept & delete…" : "Accept") : acceptTitle(record)) { playback.stop(); model.acceptReview(record.id) }
                         .buttonStyle(.borderedProminent)
                         .disabled(record.isPhotosOperation && record.stage != .originalDeleted && !record.isDeletionCandidate)
                 }

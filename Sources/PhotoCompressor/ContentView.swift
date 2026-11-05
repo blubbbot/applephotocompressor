@@ -44,8 +44,9 @@ struct ContentView: View {
             Button(prompt.isPhotosOperation ? "Keep original & remove compressed Photos copy" : "Revert compression", role: .destructive) { model.confirmRevert(prompt) }
             Button("Cancel", role: .cancel) { model.reviewPrompt = nil }
         } message: { prompt in Text(prompt.message) }
-        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
-            if !model.isBusy { model.refreshArchiveSpace(); model.refreshSharing() }
+        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
+            model.refreshArchiveSpace()
+            if !model.isBusy { model.refreshSharing() }
         }
     }
 
@@ -65,7 +66,7 @@ struct ContentView: View {
             Picker("Media", selection: Binding(get: { model.mediaMode }, set: { model.switchMediaMode($0) })) {
                 ForEach(MediaMode.allCases) { Text($0.rawValue).tag($0) }
             }.labelsHidden().pickerStyle(.menu).frame(width: 105)
-                .disabled(model.isBusy || model.isLoading || model.indexingSizes)
+                .disabled(model.isBusy)
             Picker("Workspace", selection: $model.section) {
                 Text("Library").tag(AppSection.library)
                 Text(model.awaitingReview.isEmpty ? "Review" : "Review (\(model.awaitingReview.count))").tag(AppSection.review)
@@ -144,6 +145,12 @@ struct ContentView: View {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search \(model.mediaMode.rawValue.lowercased())", text: $model.search).textFieldStyle(.plain)
                 }.padding(9).background(surface, in: RoundedRectangle(cornerRadius: 8))
+                if model.mediaMode == .photos {
+                    Picker("Photo type", selection: $model.photoTypeFilter) {
+                        ForEach(PhotoTypeFilter.allCases) { Text($0.title).tag($0) }
+                    }.pickerStyle(.menu).controlSize(.small)
+                        .help("Uses Photos' Live Photo and panorama metadata; no original download is needed.")
+                }
                 if model.connected {
                     Picker("Library", selection: $model.librarySharingFilter) {
                         ForEach(LibrarySharingFilter.allCases) { Text($0.title).tag($0) }
@@ -168,7 +175,7 @@ struct ContentView: View {
                         Button("All visible") { model.selected.formUnion(model.visible.filter { $0.unsupportedReason == nil }.map(\.id)) }
                         Button("None") { model.selected.removeAll() }
                     }.menuStyle(.borderlessButton).fixedSize()
-                }.font(.caption).disabled(model.isBusy)
+                }.font(.caption).disabled(model.isBusy || model.isUpdatingList)
                 HStack {
                     Text(model.listOrderPending ? "Updated estimates · sorting delayed" : "Sort updates after browsing pauses")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -179,7 +186,7 @@ struct ContentView: View {
                 }.frame(height: 16)
             }.padding(14)
             Divider()
-            if model.isLoading {
+            if model.isLoading || (model.isUpdatingList && model.visible.isEmpty) {
                 VStack(spacing: 12) { ProgressView(); Text(model.activity).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.visible.isEmpty {
                 VStack(spacing: 14) {
@@ -192,6 +199,9 @@ struct ContentView: View {
                     }
                     if model.librarySharingFilter != .all {
                         Button("Show all libraries") { model.librarySharingFilter = .all }
+                    }
+                    if model.mediaMode == .photos && model.photoTypeFilter != .all {
+                        Button("Show all photo types") { model.photoTypeFilter = .all }
                     }
                     if model.hideProcessed, !model.processedIDs.isEmpty {
                         Button("Show processed videos") { model.hideProcessed = false }
@@ -447,6 +457,7 @@ struct ContentView: View {
                         Text("Your decisions are saved. Return here whenever you are ready.").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    DiskSpaceIndicator().environmentObject(model)
                     if model.isBusy && !model.isReviewing { Button("Stop safely") { model.stop() } }
                     Button("Back to Library") { model.section = .library }
                 }
@@ -458,6 +469,7 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
+                DiskSpaceIndicator().environmentObject(model)
                 if !model.selected.isEmpty && !model.isBusy {
                     VStack(alignment: .trailing, spacing: 3) { Text("~" + DisplayFormat.bytes(model.selectedSavings)).font(.system(size: 24, weight: .semibold, design: .rounded)).foregroundStyle(accent); Text(model.connected || model.demo ? "potential iCloud savings" : "estimated file savings").font(.caption2).foregroundStyle(.secondary) }
                 }
@@ -568,7 +580,7 @@ private struct VideoRow: View {
                 .toggleStyle(.checkbox).labelsHidden()
                 .disabled(model.isBusy || video.unsupportedReason != nil)
             VideoSidebarRow(title: video.name,
-                            detail: "\(video.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending") · " + (video.kind.isPhoto ? (video.kind == .livePhoto ? "Live Photo" : "Photo") : DisplayFormat.duration(video.facts.duration)) + (video.facts.isHDR ? " · HDR" : ""),
+                            detail: "\(video.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending") · " + (video.kind.isPhoto ? (video.kind == .livePhoto ? "Live Photo" : video.isPanorama ? "Panorama" : "Photo") : DisplayFormat.duration(video.facts.duration)) + (video.facts.isHDR ? " · HDR" : ""),
                             status: statusText, savings: savingsText, statusColor: statusColor,
                             progress: model.statuses[video.id]?.fraction,
                             sharing: video.asset != nil && model.sharing.enabled ? model.sharing.observation(for: video.id) : nil) {

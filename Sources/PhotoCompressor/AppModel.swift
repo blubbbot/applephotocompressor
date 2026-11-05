@@ -29,7 +29,15 @@ enum MediaMode: String, CaseIterable, Identifiable {
 final class AppModel: ObservableObject {
     let sharing = SharedLibraryController()
     private var sharingChanges: AnyCancellable?
-    @Published var videos: [LibraryVideo] = [] { didSet { deferListReordering() } }
+    @Published var videos: [LibraryVideo] = [] { didSet { requestLibraryUpdate(resort: true) } }
+    @Published private(set) var visible: [LibraryVideo] = []
+    @Published private(set) var isUpdatingList = false
+    @Published var photoTypeFilter: PhotoTypeFilter = .all {
+        didSet { UserDefaults.standard.set(photoTypeFilter.rawValue, forKey: "photoTypeFilter"); requestLibraryUpdate() }
+    }
+    @Published var reviewPhotoTypeFilter: PhotoTypeFilter = .all {
+        didSet { UserDefaults.standard.set(reviewPhotoTypeFilter.rawValue, forKey: "reviewPhotoTypeFilter") }
+    }
     @Published private(set) var mediaMode: MediaMode = .videos
     @Published var photoSettings = PhotoCompressionSettings() {
         didSet {
@@ -38,7 +46,7 @@ final class AppModel: ObservableObject {
         }
     }
     @Published var librarySharingFilter: LibrarySharingFilter = .all {
-        didSet { UserDefaults.standard.set(librarySharingFilter.rawValue, forKey: "librarySharingFilter") }
+        didSet { UserDefaults.standard.set(librarySharingFilter.rawValue, forKey: "librarySharingFilter"); requestLibraryUpdate() }
     }
     @Published var reviewSharingFilter: ReviewSharingFilter = .all {
         didSet { UserDefaults.standard.set(reviewSharingFilter.rawValue, forKey: "reviewSharingFilter") }
@@ -55,12 +63,12 @@ final class AppModel: ObservableObject {
             updateListOrderNow()
         }
     }
-    @Published var search = "" { didSet { UserDefaults.standard.set(search, forKey: mediaMode == .videos ? "librarySearch" : "photoLibrarySearch") } }
+    @Published var search = "" { didSet { UserDefaults.standard.set(search, forKey: mediaMode == .videos ? "librarySearch" : "photoLibrarySearch"); requestLibraryUpdate() } }
     @Published var sort: VideoSort = .largest { didSet { UserDefaults.standard.set(sort.rawValue, forKey: mediaMode == .videos ? "librarySort" : "photoLibrarySort"); updateListOrderNow() } }
     @Published private var listOrder = StableListOrder<String>()
-    @Published var minimumSize: Int64 = 0 { didSet { UserDefaults.standard.set(minimumSize, forKey: mediaMode == .videos ? "libraryMinimumSize" : "photoLibraryMinimumSize") } }
-    @Published var hideUnsupported = true { didSet { UserDefaults.standard.set(hideUnsupported, forKey: "hideUnsupported") } }
-    @Published var hideProcessed = true { didSet { UserDefaults.standard.set(hideProcessed, forKey: "hideProcessed") } }
+    @Published var minimumSize: Int64 = 0 { didSet { UserDefaults.standard.set(minimumSize, forKey: mediaMode == .videos ? "libraryMinimumSize" : "photoLibraryMinimumSize"); requestLibraryUpdate() } }
+    @Published var hideUnsupported = true { didSet { UserDefaults.standard.set(hideUnsupported, forKey: "hideUnsupported"); requestLibraryUpdate() } }
+    @Published var hideProcessed = true { didSet { UserDefaults.standard.set(hideProcessed, forKey: "hideProcessed"); requestLibraryUpdate() } }
     @Published var replaceOriginals = false {
         didSet { UserDefaults.standard.set(replaceOriginals, forKey: mediaMode == .videos ? "replaceOriginals" : "photoReplaceOriginals") }
     }
@@ -72,7 +80,13 @@ final class AppModel: ObservableObject {
     @Published var overallProgress = 0.0
     @Published var activity = ""
     @Published var statuses: [String: RowStatus] = [:]
-    @Published var history: [OperationRecord] = []
+    @Published var history: [OperationRecord] = [] {
+        didSet {
+            processedSources = Set(history.filter { $0.stage != .reverted && ($0.replacementID != nil || $0.stage == .originalDeleted) }.map(\.sourceID))
+            processedOutputs = Set(history.filter { $0.stage != .reverted }.compactMap(\.replacementID))
+            requestLibraryUpdate()
+        }
+    }
     @Published var showHistory = false
     @Published var section: AppSection = .library {
         didSet { if section == .review { player?.pause() } }
@@ -86,6 +100,7 @@ final class AppModel: ObservableObject {
     @Published var inspectionPrompt: InspectionPrompt?
     @Published var batchSummary: BatchSummary?
     @Published var archiveSpace: ArchiveSpaceSnapshot?
+    @Published var workingSpace: ArchiveSpaceSnapshot?
     @Published var backupDirectory: URL {
         didSet { UserDefaults.standard.set(backupDirectory.path, forKey: "backupDirectory"); refreshArchiveSpace() }
     }
@@ -97,6 +112,14 @@ final class AppModel: ObservableObject {
     private var inspectionIDs: [String: UUID] = [:]
     private var archiveSpaceTask: Task<Void, Never>?
     private var reorderTask: Task<Void, Never>?
+    private var listTask: Task<Void, Never>?
+    private var listRevision = UUID()
+    private var listNeedsSort = true
+    private var applyNextSort = false
+    private var processedSources = Set<String>()
+    private var processedOutputs = Set<String>()
+    private var libraryLoadTask: Task<Void, Never>?
+    private var libraryLoadID = UUID()
     private var previewPosition = CMTime.zero
     private var previewShouldResume = false
     private var previewMuted = false
@@ -121,13 +144,19 @@ final class AppModel: ObservableObject {
         replaceOriginals = UserDefaults.standard.bool(forKey: "replaceOriginals")
         librarySharingFilter = UserDefaults.standard.string(forKey: "librarySharingFilter").flatMap(LibrarySharingFilter.init(rawValue:)) ?? .all
         reviewSharingFilter = UserDefaults.standard.string(forKey: "reviewSharingFilter").flatMap(ReviewSharingFilter.init(rawValue:)) ?? .all
-        sharingChanges = sharing.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        photoTypeFilter = UserDefaults.standard.string(forKey: "photoTypeFilter").flatMap(PhotoTypeFilter.init(rawValue:)) ?? .all
+        reviewPhotoTypeFilter = UserDefaults.standard.string(forKey: "reviewPhotoTypeFilter").flatMap(PhotoTypeFilter.init(rawValue:)) ?? .all
+        sharingChanges = sharing.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+            // objectWillChange precedes the new dictionary value.
+            Task { @MainActor [weak self] in self?.requestLibraryUpdate() }
+        }
         Task { await reloadHistory(); refreshArchiveSpace() }
         if CommandLine.arguments.contains("--demo") { loadDemo() }
     }
 
     var focused: LibraryVideo? { videos.first { $0.id == focusedID } }
-    var selectedVideos: [LibraryVideo] { videos.filter { selected.contains($0.id) } }
+    var selectedVideos: [LibraryVideo] { selected.isEmpty ? [] : videos.filter { selected.contains($0.id) } }
     var pending: [OperationRecord] { history.filter(\.isDeletionCandidate) }
     var reviewRecords: [OperationRecord] { history.filter { $0.hasReviewableCopy && $0.kind.isPhoto == (mediaMode == .photos) } }
     var awaitingReview: [OperationRecord] { reviewRecords.filter(\.needsReview) }
@@ -136,7 +165,7 @@ final class AppModel: ObservableObject {
     var selectedSavings: Int64 { selectedVideos.reduce(0) { $0 + (estimatedSavings($1) ?? 0) } }
     var unknownSelectedSizes: Int { selectedVideos.filter { $0.facts.bytes == nil }.count }
     var isInspecting: Bool { inspections.values.contains(where: \.isWorking) }
-    var slowMotionCount: Int { videos.filter(\.isSlowMotion).count }
+    var slowMotionCount: Int { mediaMode == .photos ? 0 : videos.filter(\.isSlowMotion).count }
     var estimatedArchiveBytes: Int64 {
         guard !selected.isEmpty else { return 0 }
         let largest = selectedVideos.compactMap(\.facts.bytes).max() ?? 0
@@ -146,40 +175,38 @@ final class AppModel: ObservableObject {
         guard let available = archiveSpace?.availableBytes, !selected.isEmpty else { return false }
         return available < estimatedArchiveBytes
     }
-    var processedIDs: Set<String> {
-        Set(history.filter { $0.stage != .reverted && ($0.replacementID != nil || $0.stage == .originalDeleted) }.map(\.sourceID))
-    }
-    var visible: [LibraryVideo] {
-        let outputs = Set(history.filter { $0.stage != .reverted }.compactMap(\.replacementID))
-        let ranks = Dictionary(uniqueKeysWithValues: listOrder.ids.enumerated().map { ($0.element, $0.offset) })
-        return videos.filter {
-            (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) &&
-            (!hideUnsupported || $0.unsupportedReason == nil) &&
-            (!hideProcessed || (!processedIDs.contains($0.id) && !outputs.contains($0.id))) &&
-            librarySharingFilter.includes(sharing.observation(for: $0.id).state) &&
-            (minimumSize == 0 || ($0.facts.bytes ?? 0) >= minimumSize)
-        }.sorted { (ranks[$0.id] ?? .max) < (ranks[$1.id] ?? .max) }
-    }
-
+    var processedIDs: Set<String> { processedSources }
     var listOrderPending: Bool { listOrder.pending != nil }
 
-    private var freshlySortedIDs: [String] {
-        videos.sorted { lhs, rhs in
-            let left: Double, right: Double
-            switch sort {
-            case .largest: left = Double(lhs.facts.bytes ?? 0); right = Double(rhs.facts.bytes ?? 0)
-            case .savings: left = Double(estimatedSavings(lhs) ?? 0); right = Double(estimatedSavings(rhs) ?? 0)
-            case .newest: left = lhs.date.timeIntervalSinceReferenceDate; right = rhs.date.timeIntervalSinceReferenceDate
-            case .longest: left = lhs.facts.duration; right = rhs.facts.duration
+    func requestLibraryUpdate(resort: Bool = false, immediately: Bool = false) {
+        listNeedsSort = listNeedsSort || resort
+        applyNextSort = applyNextSort || immediately
+        listTask?.cancel()
+        let token = UUID(); listRevision = token
+        let items = videos, order = listOrder
+        var query = LibraryListIndex.Query()
+        query.search = search; query.minimumSize = minimumSize
+        query.hideUnsupported = hideUnsupported; query.hideProcessed = hideProcessed
+        query.processedIDs = processedSources; query.outputIDs = processedOutputs
+        query.sharingFilter = librarySharingFilter; query.sharing = sharing.observations; query.sharingEnabled = sharing.enabled
+        query.photoFilter = mediaMode == .photos ? photoTypeFilter : .all
+        query.sort = sort; query.settings = settings; query.photoSettings = photoSettings
+        let needsSort = listNeedsSort, apply = applyNextSort
+        isUpdatingList = true
+        listTask = Task {
+            await Task.yield() // coalesce a mode/settings/metadata update
+            guard !Task.isCancelled else { return }
+            let worker = Task.detached(priority: .userInitiated) { try LibraryListIndex.build(items, query: query, order: order, resort: needsSort, applyImmediately: apply) }
+            do {
+                let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                guard !Task.isCancelled, listRevision == token else { return }
+                listNeedsSort = false; applyNextSort = false
+                listOrder = result.order; visible = result.items; isUpdatingList = false
+                if needsSort { scheduleListReordering() }
+            } catch {
+                if listRevision == token { isUpdatingList = false }
             }
-            if left != right { return left > right }
-            return lhs.id < rhs.id
-        }.map(\.id)
-    }
-
-    private func deferListReordering() {
-        listOrder.propose(freshlySortedIDs)
-        scheduleListReordering()
+        }
     }
 
     private func scheduleListReordering() {
@@ -188,37 +215,30 @@ final class AppModel: ObservableObject {
         reorderTask = Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard !Task.isCancelled else { return }
-            listOrder.commit()
+            listOrder.commit(); requestLibraryUpdate()
         }
     }
 
     func updateListOrderNow() {
-        reorderTask?.cancel(); listOrder.apply(freshlySortedIDs)
+        reorderTask?.cancel(); requestLibraryUpdate(resort: true, immediately: true)
     }
     func plan(_ video: LibraryVideo) -> CompressionPlan { CompressionPlan(facts: video.facts, settings: settings) }
     func estimatedBytes(_ video: LibraryVideo) -> Int64 {
-        guard video.kind.isPhoto else { return plan(video).estimatedBytes }
-        let size = video.facts.bytes ?? Int64(video.facts.width * video.facts.height / 3)
-        let (width, height) = PhotoEncoder.dimensions(width: video.facts.width, height: video.facts.height, resolution: photoSettings.resolution)
-        let ratio = Double(width * height) / Double(max(1, video.facts.width * video.facts.height))
-        // A deliberately rough planning estimate. Live motion is not inspected
-        // or downloaded here; only the finished resource totals determine saving.
-        let baseFraction = video.photoFormat == "public.heic" ? 0.9 : 0.65
-        let fraction = video.kind == .livePhoto && !photoSettings.convertLiveToStill ? 0.9 : min(0.98, max(0.1, baseFraction * photoSettings.quality / 0.8 * ratio))
-        return Int64(Double(size) * fraction)
+        LibraryListIndex.estimatedBytes(video, settings: settings, photoSettings: photoSettings)
     }
     func estimatedSavings(_ video: LibraryVideo) -> Int64? { video.facts.bytes.map { max(0, $0 - estimatedBytes(video)) } }
 
     func switchMediaMode(_ mode: MediaMode) {
-        guard mode != mediaMode, !isBusy, !isLoading, !indexingSizes else { return }
+        guard mode != mediaMode, !isBusy else { return }
+        libraryLoadTask?.cancel(); libraryLoadID = UUID(); isLoading = false; indexingSizes = false
         clearInspections(); player?.pause(); player = nil; selected.removeAll(); focusedID = nil; reviewFocusedID = nil
-        mediaMode = mode
+        mediaMode = mode; videos = []; visible = []
         search = UserDefaults.standard.string(forKey: mode == .videos ? "librarySearch" : "photoLibrarySearch") ?? ""
         minimumSize = max(0, (UserDefaults.standard.object(forKey: mode == .videos ? "libraryMinimumSize" : "photoLibraryMinimumSize") as? NSNumber)?.int64Value ?? 0)
         sort = UserDefaults.standard.string(forKey: mode == .videos ? "librarySort" : "photoLibrarySort").flatMap(VideoSort.init(rawValue:)) ?? .largest
         replaceOriginals = UserDefaults.standard.bool(forKey: mode == .videos ? "replaceOriginals" : "photoReplaceOriginals")
         if mode == .photos && sort == .longest { sort = .largest }
-        if connected { connect() }
+        if connected { connect(refreshSizes: false) }
         else { videos = []; demo = false }
     }
     func outputRecord(for id: String) -> OperationRecord? {
@@ -250,8 +270,10 @@ final class AppModel: ObservableObject {
         let directory = backupDirectory
         archiveSpaceTask = Task {
             let snapshot = await Task.detached(priority: .utility) { ArchiveSpaceSnapshot.read(at: directory) }.value
+            let working = await Task.detached(priority: .utility) { ArchiveSpaceSnapshot.read(at: FileManager.default.temporaryDirectory) }.value
             guard !Task.isCancelled, backupDirectory == directory else { return }
             archiveSpace = snapshot
+            workingSpace = working
         }
     }
 
@@ -316,24 +338,23 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func connect() {
+    func connect(refreshSizes: Bool = true) {
         guard !isBusy, !isLoading, !indexingSizes else { return }
         let refreshing = connected && !demo
+        let previousItems = videos
         let previous = Dictionary(uniqueKeysWithValues: videos.map { ($0.id, $0) })
         let previousSelection = selected, previousFocus = focusedID
+        let token = UUID(); libraryLoadID = token
+        let photos = mediaMode == .photos
         isLoading = true; activity = "Opening your Photos library…"
-        Task {
+        libraryLoadTask = Task {
             do {
                 try await PhotosService.authorize()
+                guard libraryLoadID == token, !Task.isCancelled else { return }
                 await reloadHistory()
-                var loaded = await PhotosService.videos(photos: mediaMode == .photos)
-                for index in loaded.indices {
-                    if let old = previous[loaded[index].id], old.asset?.modificationDate == loaded[index].asset?.modificationDate, old.hasInspectedFacts {
-                        loaded[index].facts = old.facts; loaded[index].factsAreMeasured = true
-                    } else if let record = history.first(where: { $0.sourceID == loaded[index].id && $0.sourceModifiedAt == loaded[index].asset?.modificationDate }), let facts = record.sourceFacts {
-                        loaded[index].facts = facts; loaded[index].factsAreMeasured = true
-                    }
-                }
+                guard libraryLoadID == token, !Task.isCancelled else { return }
+                let loaded = try await PhotosService.videos(photos: photos, previous: previousItems, history: history)
+                guard libraryLoadID == token, !Task.isCancelled else { return }
                 let valid = Set(loaded.map(\.id))
                 let loadedByID = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, $0) })
                 for id in Array(inspectionTasks.keys) where !valid.contains(id) || previous[id]?.asset?.modificationDate != loadedByID[id]?.asset?.modificationDate {
@@ -353,20 +374,26 @@ final class AppModel: ObservableObject {
                     focusedID = nil; player?.pause(); player = nil
                 }
                 await reconcileImportedCopies()
+                guard libraryLoadID == token, !Task.isCancelled else { return }
                 refreshSharing(force: true)
                 isLoading = false; activity = "\(videos.count) \(mediaMode.rawValue.lowercased()) in your library"
                 indexingSizes = true
                 do {
-                    let sizes = try await PhotosScript.sizes()
+                    let sizes = try await LibrarySizeCache.shared.sizes(refresh: refreshSizes)
+                    guard libraryLoadID == token, !Task.isCancelled else { return }
                     var measured = videos
                     for index in measured.indices { if let size = sizes[measured[index].id] { measured[index].facts.bytes = size } }
                     videos = measured
                 } catch {
+                    guard libraryLoadID == token, !Task.isCancelled else { return }
                     notice = AppNotice(text: "The library is open, but file sizes are unavailable. You can still preview and compress videos; sizes are measured when each original downloads. \(error.localizedDescription)")
                 }
                 indexingSizes = false
                 if let video = focused { inspect(video, allowNetwork: false) }
-            } catch { isLoading = false; activity = ""; notice = AppNotice(text: error.localizedDescription) }
+            } catch {
+                guard libraryLoadID == token, !Task.isCancelled else { return }
+                isLoading = false; activity = ""; notice = AppNotice(text: error.localizedDescription)
+            }
         }
     }
 
@@ -376,22 +403,30 @@ final class AppModel: ObservableObject {
         guard panel.runModal() == .OK else { return }
         clearInspections()
         let urls = panel.urls
+        let photos = mediaMode == .photos
+        let token = UUID(); libraryLoadID = token
         isLoading = true; activity = "Inspecting video files…"
-        Task {
+        libraryLoadTask = Task {
             var loaded: [LibraryVideo] = []
             for url in urls {
+                guard libraryLoadID == token, !Task.isCancelled else { return }
                 do {
                     let info: VideoFacts
-                    if mediaMode == .photos {
+                    if photos {
                         let photo = try await Task.detached { try PhotoEncoder.inspect(url) }.value
                         info = VideoFacts(width: photo.width, height: photo.height, duration: 0, frameRate: 0, bytes: photo.bytes)
                     } else { info = try await VideoEncoder.inspect(url).facts }
                     loaded.append(LibraryVideo(id: url.path, name: url.lastPathComponent, asset: nil, fileURL: url, facts: info,
-                        date: (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date(), unsupportedReason: nil, kind: mediaMode == .photos ? .photo : .video))
-                } catch { notice = AppNotice(text: "\(url.lastPathComponent): \(error.localizedDescription)") }
+                        date: (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date(), unsupportedReason: nil, kind: photos ? .photo : .video))
+                } catch {
+                    guard libraryLoadID == token, !Task.isCancelled else { return }
+                    notice = AppNotice(text: "\(url.lastPathComponent): \(error.localizedDescription)")
+                }
             }
+            guard libraryLoadID == token, !Task.isCancelled else { return }
             videos = loaded; connected = false; demo = false; replaceOriginals = false
             librarySharingFilter = .all
+            if mediaMode == .photos { photoTypeFilter = .all }
             selected.removeAll(); focusedID = nil; player = nil
             isLoading = false; activity = "\(loaded.count) local \(mediaMode.rawValue.lowercased()) · originals remain in place"
         }
@@ -503,6 +538,7 @@ final class AppModel: ObservableObject {
                 }
                 var record = OperationRecord(sourceID: video.id, sourceName: video.name, backupPath: "", outputPath: "", settings: settings)
                 record.mediaKind = video.kind
+                if video.kind.isPhoto { record.sourceIsPanorama = video.isPanorama }
                 if video.kind.isPhoto { record.photoSettings = photoSettings }
                 operationIDs.insert(record.id)
                 let directory = archive.appendingPathComponent(record.id.uuidString)

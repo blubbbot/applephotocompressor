@@ -49,6 +49,7 @@ struct ArchiveSpaceSnapshot: Sendable {
     let availableBytes: Int64?
     let volumeName: String?
     let error: String?
+    var volumePath: String? = nil
 
     static func read(at directory: URL) -> ArchiveSpaceSnapshot {
         do {
@@ -63,9 +64,9 @@ struct ArchiveSpaceSnapshot: Sendable {
             while !FileManager.default.fileExists(atPath: existing.path), existing.path != "/" {
                 existing.deleteLastPathComponent()
             }
-            let values = try existing.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey, .volumeLocalizedNameKey])
+            let values = try existing.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey, .volumeLocalizedNameKey, .volumeURLKey])
             let available = values.volumeAvailableCapacityForImportantUsage ?? values.volumeAvailableCapacity.map(Int64.init)
-            return ArchiveSpaceSnapshot(availableBytes: available, volumeName: values.volumeLocalizedName, error: nil)
+            return ArchiveSpaceSnapshot(availableBytes: available, volumeName: values.volumeLocalizedName, error: nil, volumePath: values.volume?.path)
         } catch {
             return ArchiveSpaceSnapshot(availableBytes: nil, volumeName: nil, error: "Disk space unavailable: \(error.localizedDescription)")
         }

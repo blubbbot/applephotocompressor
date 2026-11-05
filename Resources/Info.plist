@@ -9,8 +9,8 @@
     <key>CFBundleIconFile</key><string>PhotoCompressorIcon.icns</string>
     <key>CFBundleIconName</key><string>PhotoCompressorIcon</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-    <key>CFBundleShortVersionString</key><string>0.2.3</string>
-    <key>CFBundleVersion</key><string>13</string>
+    <key>CFBundleShortVersionString</key><string>0.2.4</string>
+    <key>CFBundleVersion</key><string>14</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPhotoLibraryUsageDescription</key><string>Browse photos, Live Photos, and videos; create smaller copies and delete only originals that you choose to replace.</string>

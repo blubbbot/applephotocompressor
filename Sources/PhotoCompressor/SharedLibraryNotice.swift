@@ -32,6 +32,34 @@ struct SharedLibraryDetectionSettings: View {
     }
 }
 
+/// Expanded review keeps the sharing action in the existing toolbar row.
+/// Long instructions are in the menu instead of covering the previews.
+struct SharedLibraryToolbarHint: View {
+    @EnvironmentObject private var model: AppModel
+    let record: OperationRecord
+    private var original: SharedLibraryState { model.sourceSharing(record)?.state ?? .unknown }
+    private var target: SharedLibraryState { record.reviewPhotosID.map { model.sharing.observation(for: $0).state } ?? .unknown }
+    private var needsSharing: Bool { original == .shared && target != .shared }
+    private var restored: Bool { record.stage == .reverted }
+    var body: some View {
+        Menu {
+            Text("Original: \(original.title) · \(restored ? "Restored" : "Copy"): \(target.title) (advisory)")
+            if needsSharing { Text("In Photos: Image → Move to Shared Library. Then refresh here.") }
+            if let id = record.reviewPhotosID {
+                Button(restored ? "Show original in Photos" : needsSharing ? "Show copy to re-share…" : "Show copy in Photos") { model.showInPhotos(id: id) }
+                    .disabled(!model.connected || model.isBusy)
+            }
+            Button("Refresh sharing metadata") { model.refreshSharing(force: true) }
+                .disabled(!model.connected || !model.sharing.enabled || model.sharing.checking || model.isBusy)
+            Link("Shared Library instructions", destination: URL(string: "https://support.apple.com/guide/photos/pht9a3599aac/mac")!)
+        } label: {
+            Label(needsSharing ? "Re-share" : target == .shared ? "Shared" : "Sharing", systemImage: needsSharing ? "person.2.badge.gearshape" : "person.2")
+                .foregroundStyle(needsSharing ? Color.orange : Color.secondary)
+        }.menuStyle(.borderlessButton).fixedSize()
+            .help("Original: \(original.title); current Photos item: \(target.title). \(needsSharing ? "Open the copy in Photos and choose Image → Move to Shared Library." : "Database placement is advisory.")")
+    }
+}
+
 struct SharedLibraryNotice: View {
     @EnvironmentObject private var model: AppModel
     var replacementID: String? = nil

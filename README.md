@@ -138,6 +138,19 @@ the arrow keys postpones that reorder, so the next row remains the next row in
 the order you were browsing. An explicit sort/settings change or the list's
 update-order button applies the new ordering immediately. Ties use stable IDs.
 
+Expanded Review moves sharing into a compact toolbar menu (**Re-share** when
+attention is needed). It retains the reveal action, current/source status,
+manual-move instructions, and refresh action. The full notice appears in the
+normal layout; expanded previews no longer reserve space for that banner.
+
+The existing footer shows archive free space with no extra row; expanded Review
+shows it in the toolbar. It refreshes every ten seconds during compression and
+while idle, and checks both archive storage and the Mac's temporary-working
+volume. The label turns orange below **10 GB** or if the estimated selection may
+not fit, and red below **2 GB**. Hover for both capacities and the selection's
+original/copy/working-space estimate. Unknown original sizes can increase this
+estimate; the existing per-item capacity checks still run before archiving.
+
 ### iCloud Shared Photo Library
 
 **Regular albums, Shared Albums, and iCloud Shared Photo Library are different.**
@@ -210,6 +223,26 @@ revalidated without treating an arbitrary edit as safe. It does not certify
 shared membership or iCloud synchronization.
 
 ### Photos and Live Photos
+
+Photo mode offers **Photo type → All photos / Live Photos / Panoramas** in the
+Library list, with an independent filter in Review. Live/panorama classification
+uses PhotoKit subtype metadata, without downloading originals. Review filters
+by the original type, so Live Photos explicitly converted to stills remain in
+the Live Photos filter. Panorama flags are saved with new operations; older
+journal entries without that flag cannot be classified as panoramas in Review.
+
+Large-library sorting and filtering run on cancellable background snapshots;
+views reuse the cached result. Processed/replacement ID sets and sort keys are
+built once per update instead of repeatedly inside the item loop/comparator.
+Sharing refreshes reuse indexed filenames and fetch any missing history assets
+off the UI thread. Original-fact reconciliation is also part of background
+indexing, with autorelease pools around PhotoKit resource enumeration.
+
+You can switch media modes while the catalog or sizes are loading; generation
+checks discard obsolete results. A shared two-minute size cache coalesces rapid
+Videos/Photos switches into one Photos scripting pass. Explicit Refresh requests
+fresh sizes. Initial loading can still take time, particularly with cloud-backed
+large libraries, but does not require running catalog work on the UI actor.
 
 Photo compression makes sense particularly for large JPEGs and for deliberate
 downscaling. Already-efficient HEIC images may offer little saving at an

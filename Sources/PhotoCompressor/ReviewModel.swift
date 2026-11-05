@@ -25,6 +25,7 @@ extension AppModel {
     func openReview(_ record: OperationRecord? = nil) {
         if let record {
             if !reviewSharingMatches(record, filter: reviewSharingFilter) { reviewSharingFilter = .all }
+            if record.kind.isPhoto && !reviewPhotoTypeFilter.includes(isLivePhoto: record.kind == .livePhoto, isPanorama: record.sourceIsPanorama == true) { reviewPhotoTypeFilter = .all }
             reviewFocusedID = record.id
         }
         else if reviewFocusedID == nil { reviewFocusedID = awaitingReview.first?.id ?? reviewRecords.first?.id }

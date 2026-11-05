@@ -390,3 +390,60 @@ both architectures, signatures, privacy descriptions, icons, and SQLite linkage.
 No real Photos library/database or app UI was opened, and no user-library asset
 was changed. Live shared deletion, menu/filter layout, and manual re-sharing
 remain untested, following the user's request to continue without UI testing.
+
+### 0.2.4 — photo types, responsive indexing, and compact status controls
+
+Library and Review have independent All photos / Live Photos / Panoramas filters
+in Photos mode. Catalog classification uses PhotoKit's photoLive/photoPanorama
+subtypes without a media download. Original panorama flags are stored as an
+optional journal field. Review still classifies Live-to-still conversions by
+source kind. Older records without a panorama flag cannot be classified as
+panoramas retrospectively after their source is gone.
+
+Code inspection identified main-actor PhotoKit resource enumeration during whole
+library sharing refresh, repeated processed-ID set construction inside the item
+filter, and repeated full-library ranking/sorting during view evaluation. The
+new list builder takes value snapshots, computes each sort key once, builds
+lookup sets once, and filters/orders on a cancellable detached task. The model
+publishes one cached visible array guarded by a revision token. Measurements
+retain pending stable order until the existing two-second idle delay commits;
+filters retain the ranks of hidden items. Selection actions wait for the new
+list snapshot rather than selecting an obsolete filtered result.
+
+Sharing refresh reuses names/type/date already indexed for catalog assets;
+missing history identities and database inspection run off the UI actor. Cached
+fact reconciliation is part of background PhotoKit enumeration, with a per-item
+autorelease pool and cancellation checks. Mode changes cancel the prior catalog
+job, clear its old list, and reject late load/size results. The mode selector is
+usable during catalog and size loading. File loading also uses the same revision
+guards. A shared two-minute size cache coalesces concurrent/rapid mode switches
+into one Photos scripting pass; explicit library Refresh requests fresh sizes.
+
+Expanded Review replaces the large sharing banner with a compact toolbar menu
+containing source/current status, reveal, manual sharing instructions, refresh,
+and the Apple help link. Normal review keeps the detailed banner. Icon layout
+controls and shorter compact review actions leave room for the previews.
+
+A single-line free-space label fits the existing footer HStack, or the expanded
+Review toolbar. It reads archive and Mac temporary-working volume capacity on
+background tasks, every ten seconds including while busy. It warns orange below
+10 GB or when the selection estimate exceeds archive capacity, and red below
+2 GB. Its tooltip gives both capacities, the selection's archive/working estimate,
+and unknown-size limitations. A missing archive drive is shown as unavailable;
+no extra status row or warning modal was introduced. Existing per-item capacity
+checks and archive/import/deletion safeguards remain in force.
+
+All **48 automated tests** passed on Intel, including nine new cases: subtype
+selection and source/journal compatibility, warning thresholds and insufficient
+selection capacity, real concurrent size-pass coalescing/refresh/retry, cancelled
+snapshot rejection, combined sharing/type filters, stable order across filtering
+and measurement, and a 30,000-item off-main catalog build. The complete large
+catalog test took about 0.13 seconds here; this is a synthetic list benchmark,
+not a live Photos/PhotoKit loading measurement. A final focused run passed all
+nine new tests after file-load cancellation and enumeration cleanup.
+
+No real Photos library/database or app UI was opened. Large live-library load
+latency, the native subtype filters, expanded toolbar layout, and live low-disk
+rendering remain unverified. Universal-build and extracted ZIP checks validate
+both architectures, privacy descriptions, signature, icon resources, version,
+and SQLite linkage; public download verification compares the SHA-256 checksum.
