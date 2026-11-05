@@ -6,9 +6,10 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [.executable(name: "PhotoCompressor", targets: ["PhotoCompressor"])],
     targets: [
-        .target(name: "CompressionCore"),
+        .systemLibrary(name: "CSQLite"),
+        .target(name: "CompressionCore", dependencies: ["CSQLite"]),
         .executableTarget(name: "PhotoCompressor", dependencies: ["CompressionCore"]),
-        .testTarget(name: "CompressionCoreTests", dependencies: ["CompressionCore"]),
+        .testTarget(name: "CompressionCoreTests", dependencies: ["CompressionCore", "CSQLite"]),
         .testTarget(name: "PhotoCompressorTests", dependencies: ["PhotoCompressor"])
     ]
 )

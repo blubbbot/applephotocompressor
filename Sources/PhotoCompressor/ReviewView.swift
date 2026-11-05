@@ -47,6 +47,7 @@ struct ReviewView: View {
             if let id, !records.contains(where: { $0.id == id }), model.reviewRecords.contains(where: { $0.id == id }) { showAll = true }
         }
         .task(id: "\(focused?.id.uuidString ?? "none")-\(previewRevision)") {
+            model.refreshSharing(force: true)
             if let record = focused, !record.kind.isPhoto { await playback.load(record) }
             else { playback.stop() }
         }
@@ -122,7 +123,9 @@ struct ReviewView: View {
                 List(selection: $model.reviewFocusedID) {
                     ForEach(records) { record in
                         VideoSidebarRow(title: record.sourceName, detail: sizeSummary(record),
-                                        status: reviewState(record), savings: savingsSummary(record), statusColor: record.error == nil ? .secondary : .orange) {
+                                        status: reviewState(record), savings: savingsSummary(record), statusColor: record.error == nil ? .secondary : .orange,
+                                        sharing: record.isPhotosOperation && (model.sharing.enabled || record.sourceSharedLibrary != nil) ? model.sourceSharing(record) : nil,
+                                        sharingPrefix: "Original: ") {
                             ReviewThumbnail(url: URL(fileURLWithPath: record.outputPath), isPhoto: record.kind.isPhoto)
                         }.tag(record.id)
                     }
@@ -169,7 +172,7 @@ struct ReviewView: View {
                 }
                 if record.isPhotosOperation {
                     SharedLibraryNotice(replacementID: record.stage == .reverted ? (record.restoredOriginalID ?? record.sourceID) : record.replacementID,
-                                        compact: model.reviewPreviewExpanded, restoredOriginal: record.stage == .reverted).environmentObject(model)
+                                        compact: model.reviewPreviewExpanded, restoredOriginal: record.stage == .reverted, record: record).environmentObject(model)
                 }
                 if !model.reviewPreviewExpanded {
                     Text(record.kind.isPhoto ? "Both previews use the archived image resources. Live Photo motion controls appear below the images." : "Both previews use the local archived files. Play, seek, and step through the same moment together.")

@@ -21,6 +21,8 @@ struct PhotoCompressorApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("Connect Photos Library…") { model.connect() }.keyboardShortcut("o", modifiers: [.command, .shift]).disabled(model.isBusy)
                 Button(model.mediaMode == .photos ? "Open Photo Files…" : "Open Video Files…") { model.openFiles() }.keyboardShortcut("o").disabled(model.isBusy)
+                Divider()
+                Button("Choose Library for Sharing Detection…") { model.chooseSharingLibrary() }.disabled(model.isBusy)
             }
         }
     }

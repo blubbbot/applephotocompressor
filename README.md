@@ -144,18 +144,44 @@ update-order button applies the new ordering immediately. Ties use stable IDs.
 The public SDK used by this macOS 14+ app exposes Shared Albums through
 `PHAssetSourceType.typeCloudShared`; it does not provide a supported membership
 property or a move-to-Shared-Library operation for iCloud Shared Photo Library.
-The Photos scripting dictionary likewise provides neither operation. The app
-does not query private Photos properties or its internal database to guess.
+The Photos scripting dictionary likewise provides neither operation.
 
-Shared Library placement is therefore **not detected, restored, or verified**.
-A replacement or restored original may be in Personal Library. Review shows a
-warning and a **Show copy in Photos** action. If the source was shared, move the
-copy using **Photos → Image → Move to Shared Library** before deleting the source.
+**Optional read-only database detection** adds advisory **Shared / Personal /
+Unknown** labels to Photos items in both media modes and to Review. Under
+**After compression**, enable **Detect Shared Library (read-only)** and choose
+**the same System Photo Library** connected through PhotoKit. You can also use
+**File → Choose Library for Sharing Detection…**. The selection is retained with
+a read-only security-scoped bookmark; turning the option off stops database
+inspection. No media downloads are needed for this check.
+
+This native SQLite reader uses the participation-state approach in
+[OSXPhotos](https://github.com/RhetTbull/osxphotos/blob/main/osxphotos/photosdb/_photosdb_process_shared_library.py).
+The field interpretation is undocumented and heuristic. Supported database
+model versions are 16320–19999 (Photos 8 through 11); future/older models,
+missing or null fields, inaccessible databases, and ambiguous or unmatched
+assets stay **Unknown**. Each result matches the public asset UUID, original
+resource filename, media type, and available creation date. Reads use a consistent
+SQLite transaction with `SQLITE_OPEN_READONLY` and `query_only`; no SQL writes or
+private PhotoKit selectors are used. SQLite may update its WAL shared-memory
+reader bookkeeping; the app never changes Photos database contents.
+
+Choose the current library, not a backup: a copied or stale database can still
+contain matching asset IDs. Labels are advisory, expire without refresh, and do
+not prove the active library identity or iCloud synchronization. Metadata refreshes
+on connection, during review, periodically while idle, and before compression or
+automatic deletion. Hover over a label for the observation time and detail.
+
+**Detected shared originals are retained for Review even when automatic
+replacement is enabled.** The source observation is saved in the operation
+history. Review compares that result with the current copy's result and offers
+**Show copy in Photos**. Moving or restoring Shared Library placement still needs
+**Photos → Image → Move to Shared Library** before deleting the shared source.
 The same check applies to originals restored from an archive. See
 [Apple's instructions](https://support.apple.com/guide/photos/pht9a3599aac/mac).
 
-Automatic replacement asks once per app session whether to keep copies for
-review or proceed despite that limitation. Shared Album items remain protected.
+Automatic replacement still asks once per app session whether to keep copies
+for review or proceed for other items; Unknown may include shared originals.
+Shared Album items remain protected.
 When a tracked replacement's modification date changes, its original resources
 are compared against the archive with SHA-256 and its supported metadata is
 rechecked before removal. This allows an unchanged copy moved in Photos to be

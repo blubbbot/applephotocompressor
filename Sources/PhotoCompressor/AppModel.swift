@@ -2,6 +2,7 @@ import SwiftUI
 import Photos
 import AVKit
 import CompressionCore
+import Combine
 
 enum VideoSort: String, CaseIterable, Identifiable {
     case largest = "Largest first", savings = "Most savings", newest = "Newest first", longest = "Longest first"
@@ -26,6 +27,8 @@ enum MediaMode: String, CaseIterable, Identifiable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    let sharing = SharedLibraryController()
+    private var sharingChanges: AnyCancellable?
     @Published var videos: [LibraryVideo] = [] { didSet { deferListReordering() } }
     @Published private(set) var mediaMode: MediaMode = .videos
     @Published var photoSettings = PhotoCompressionSettings() {
@@ -112,6 +115,7 @@ final class AppModel: ObservableObject {
         hideUnsupported = UserDefaults.standard.object(forKey: "hideUnsupported") as? Bool ?? true
         hideProcessed = UserDefaults.standard.object(forKey: "hideProcessed") as? Bool ?? true
         replaceOriginals = UserDefaults.standard.bool(forKey: "replaceOriginals")
+        sharingChanges = sharing.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         Task { await reloadHistory(); refreshArchiveSpace() }
         if CommandLine.arguments.contains("--demo") { loadDemo() }
     }
@@ -342,6 +346,7 @@ final class AppModel: ObservableObject {
                     focusedID = nil; player?.pause(); player = nil
                 }
                 await reconcileImportedCopies()
+                refreshSharing(force: true)
                 isLoading = false; activity = "\(videos.count) \(mediaMode.rawValue.lowercased()) in your library"
                 indexingSizes = true
                 do {
@@ -509,6 +514,10 @@ final class AppModel: ObservableObject {
                     if let capacity, capacity < required { throw MediaError.invalid("The backup disk needs approximately \(DisplayFormat.bytes(required)) free for this video and its smaller copy.") }
                     let original = video.asset.flatMap { PhotosService.fetch($0.localIdentifier) }
                     record.sourceModifiedAt = original?.modificationDate
+                    if let original, let identity = SharedLibraryController.identity(original) {
+                        let observation = await sharing.inspect([identity])[original.localIdentifier]
+                        record.sourceSharedLibrary = observation?.state == .unknown ? (sharing.knownSharedOriginal(original.localIdentifier) ?? observation) : observation
+                    }
                     try await journal.save(record)
                     let metadata: ScriptMetadata?
                     if let original {
@@ -574,13 +583,13 @@ final class AppModel: ObservableObject {
                         record.replacementModifiedAt = PhotosService.fetch(record.replacementID!)?.modificationDate
                         record.stage = .readyToDelete
                         try await journal.save(record)
-                        if replace { ready.append(record) }
+                        if replace && !record.requiresSharedLibraryReview { ready.append(record) }
                     } else {
                         record.stage = .keptOriginal; try await journal.save(record)
                     }
                     let saved = (record.originalBytes ?? 0) - (record.outputBytes ?? 0)
                     summary.completed += 1; summary.savedBytes += max(0, saved)
-                    statuses[video.id] = RowStatus(text: "Copy ready · \(DisplayFormat.bytes(saved)) smaller")
+                    statuses[video.id] = RowStatus(text: record.requiresSharedLibraryReview ? "Shared original kept · check Review" : "Copy ready · \(DisplayFormat.bytes(saved)) smaller")
                     selected.remove(video.id)
                 } catch {
                     if error is CancellationError { summary.interrupted += 1 } else { summary.failed += 1 }
@@ -594,6 +603,7 @@ final class AppModel: ObservableObject {
             overallProgress = 1
             activity = flag.isCancelled ? "Stopped safely. Ready copies and originals are retained." : "Batch finished. Open Review to compare your copies."
             await reloadHistory()
+            refreshSharing(force: true)
             summary.originalsDeleted = history.filter { operationIDs.contains($0.id) && $0.stage == .originalDeleted }.count
             summary.stopped = flag.isCancelled
             batchSummary = summary
@@ -622,6 +632,19 @@ final class AppModel: ObservableObject {
             if !markReviewed && cancellation.isCancelled { return }
             do {
                 var verified = record
+                if !markReviewed {
+                    if let original = PhotosService.fetch(record.sourceID), let identity = SharedLibraryController.identity(original),
+                       let observation = await sharing.inspect([identity])[record.sourceID] {
+                        if observation.state == .shared || record.sourceSharedLibrary?.state != .shared {
+                            verified.sourceSharedLibrary = observation
+                            try await journal.save(verified)
+                        }
+                    }
+                    if verified.requiresSharedLibraryReview {
+                        statuses[record.sourceID] = RowStatus(text: "Shared original kept · check Review")
+                        continue
+                    }
+                }
                 if let id = record.replacementID, let replacement = PhotosService.fetch(id),
                    let expected = record.replacementModifiedAt, replacement.modificationDate != expected {
                     activity = "Rechecking replacement resources and metadata…"

@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import CompressionCore
 
 // Both workspaces use the native List selection and row spacing. Keep the row
 // content compact so a filename never wraps into a tall, narrow card.
@@ -10,6 +11,8 @@ struct VideoSidebarRow<Thumbnail: View>: View {
     var savings: String? = nil
     var statusColor: Color = .secondary
     var progress: Double? = nil
+    var sharing: SharedLibraryObservation? = nil
+    var sharingPrefix = ""
     @ViewBuilder let thumbnail: () -> Thumbnail
 
     var body: some View {
@@ -23,6 +26,7 @@ struct VideoSidebarRow<Thumbnail: View>: View {
                     .lineLimit(1).truncationMode(.middle).help(title)
                 Text(detail).font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
+                if let sharing { SharedLibraryBadge(observation: sharing, prefix: sharingPrefix) }
                 if let savings {
                     Text(savings).font(.callout.weight(.semibold)).foregroundStyle(.green)
                         .lineLimit(1).padding(.horizontal, 5).padding(.vertical, 2)

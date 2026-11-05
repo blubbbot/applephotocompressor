@@ -44,6 +44,7 @@ public struct OperationRecord: Codable, Identifiable {
     public var outputPhotoFacts: PhotoFacts?
     public var pairedVideoPath: String?
     public var pairedVideoBytes: Int64?
+    public var sourceSharedLibrary: SharedLibraryObservation?
     public var settings: CompressionSettings
 
     public init(sourceID: String, sourceName: String, backupPath: String, outputPath: String, settings: CompressionSettings) {
@@ -59,6 +60,7 @@ public struct OperationRecord: Codable, Identifiable {
     }
 
     public var isPhotosOperation: Bool { !sourceID.hasPrefix("/") }
+    public var requiresSharedLibraryReview: Bool { sourceSharedLibrary?.state == .shared }
     public var kind: MediaKind { mediaKind ?? .video }
     public var outputIsLivePhoto: Bool { kind == .livePhoto && photoSettings?.convertLiveToStill != true }
     public var originalFileBytes: Int64? { originalBytes.map { $0 - (pairedVideoBytes ?? 0) } }

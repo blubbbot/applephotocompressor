@@ -45,14 +45,14 @@ struct ContentView: View {
             Button("Replace automatically anyway", role: .destructive) { model.confirmAutomaticReplacement() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The app cannot read or restore iCloud Shared Photo Library placement. A smaller copy may be in your Personal Library. If an original is shared, move its copy back in Photos before deleting it. Choose review to keep originals until you check, or acknowledge automatic replacement for this session.")
+            Text("Shared Library placement cannot be restored automatically. Optional database detection is advisory; detected shared originals are always kept for Review. Unknown originals may also be shared. Move their copies in Photos before deleting them. Choose review to keep all originals, or acknowledge automatic replacement for other items this session.")
         }
         .confirmationDialog("Revert compression?", isPresented: Binding(get: { model.reviewPrompt != nil }, set: { if !$0 { model.reviewPrompt = nil } }), titleVisibility: .visible, presenting: model.reviewPrompt) { prompt in
             Button(prompt.isPhotosOperation ? "Keep original & remove compressed Photos copy" : "Revert compression", role: .destructive) { model.confirmRevert(prompt) }
             Button("Cancel", role: .cancel) { model.reviewPrompt = nil }
         } message: { prompt in Text(prompt.message) }
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
-            if !model.isBusy { model.refreshArchiveSpace() }
+            if !model.isBusy { model.refreshArchiveSpace(); model.refreshSharing() }
         }
     }
 
@@ -370,7 +370,10 @@ struct ContentView: View {
                     Toggle("Replace originals in Photos", isOn: $model.replaceOriginals).toggleStyle(.switch).font(.callout).disabled(!model.connected && !model.demo)
                     Text(model.replaceOriginals && (model.connected || model.demo) ? "Validated copies are imported first. macOS then asks once to delete the successfully replaced originals. The Review tab still lets you compare or revert them." : "Keep both versions until you decide in the Review tab. Compare side by side, then accept and delete the original or revert the compressed copy.")
                         .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
-                    if model.connected { SharedLibraryNotice(compact: true).environmentObject(model) }
+                    if model.connected {
+                        SharedLibraryNotice(compact: true).environmentObject(model)
+                        SharedLibraryDetectionSettings().environmentObject(model)
+                    }
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 12) {
@@ -561,7 +564,8 @@ private struct VideoRow: View {
             VideoSidebarRow(title: video.name,
                             detail: "\(video.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending") · " + (video.kind.isPhoto ? (video.kind == .livePhoto ? "Live Photo" : "Photo") : DisplayFormat.duration(video.facts.duration)) + (video.facts.isHDR ? " · HDR" : ""),
                             status: statusText, savings: savingsText, statusColor: statusColor,
-                            progress: model.statuses[video.id]?.fraction) {
+                            progress: model.statuses[video.id]?.fraction,
+                            sharing: video.asset != nil && model.sharing.enabled ? model.sharing.observation(for: video.id) : nil) {
                 VideoThumbnail(video: video)
             }
         }

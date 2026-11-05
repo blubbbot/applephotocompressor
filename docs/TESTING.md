@@ -314,3 +314,40 @@ after any asynchronous replacement revalidation, before asking Photos to delete.
 This keeps Stop safely effective if it is requested during a copy-resource
 download. Explicit accept/history deletion remains a separate user action.
 The follow-up is compiled and package-verified; no live deletion test was run.
+
+### 0.2.2 — optional read-only Shared Library detection
+
+The app can inspect a user-selected `.photoslibrary/database/Photos.sqlite`
+through SQLite's read-only open mode and a query-only read transaction. The
+native implementation follows OSXPhotos' heuristic interpretation of
+`ZACTIVELIBRARYSCOPEPARTICIPATIONSTATE`, with an explicit model-version range
+(16320–19999), schema checks, and public PhotoKit UUID/resource filename/media
+type/creation-date matching. It does not use private PhotoKit selectors or write
+Photos database contents. SQLite's normal WAL shared-memory reader bookkeeping
+may still change. A cloned/stale library can match the same IDs; UI and README
+make the user-selected current library and advisory nature explicit.
+
+Optional setup retains a read-only security-scoped bookmark. Labels refresh on
+connection, Review, periodically while idle, and before compression/automatic
+deletion. Observations expire after two minutes. Unsupported schema, denied or
+missing access, null/negative participation flags, trashed assets, duplicates,
+and identity mismatches stay Unknown. Original observations persist in history.
+A detected shared source is held for explicit Review even with automatic
+replacement enabled. A failed refresh does not remove previously observed shared
+evidence from the automatic-replacement hold. Shared Library moves remain manual.
+
+`swift test` passed **35 tests** on Intel. The six new synthetic-database tests
+cover positive/zero/null/negative flags, original resource names, case-insensitive
+UUID matching, type/date/trash/duplicate mismatches, unknown models and changed
+schemas, strict local-ID parsing, non-creation of missing databases, and journal
+compatibility/persistence. The WAL test keeps a real SQLite writer open, verifies
+that committed updates are visible, and confirms that reads leave the database
+and WAL contents unchanged. Existing video, photo/Live Photo, playback, ordering,
+archive/journal, and package regressions also pass.
+
+No actual Photos database was opened by these tests. No app UI or permission
+panel was launched, and no user-library asset was read, changed, imported, or
+deleted. Real Shared Library membership/resharing and the new UI remain untested
+live, consistent with the user's instruction to proceed without computer-use
+verification. Universal-package signature, privacy strings, icon resources,
+architectures, and the published ZIP checksum are checked separately.
