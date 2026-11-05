@@ -24,6 +24,11 @@ if [[ -n "$app_path" ]]; then
         print -u2 "Missing app icon: $icon_name"
         exit 1
     fi
+    catalog_icon=$(/usr/bin/plutil -extract CFBundleIconName raw -expect string -o - "$plist_path")
+    if [[ -z "$catalog_icon" || ! -s "$app_path/Contents/Resources/Assets.car" ]]; then
+        print -u2 "Missing compiled app icon asset catalog"
+        exit 1
+    fi
     /usr/bin/lipo "$app_path/Contents/MacOS/$executable_name" -verify_arch arm64 x86_64
     /usr/bin/codesign --verify --strict --verbose=2 "$app_path"
 fi

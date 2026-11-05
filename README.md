@@ -21,14 +21,16 @@ Privacy & Security → Open Anyway** for this app, following
 
 ## Build and open
 
-Requires macOS 14 or newer and Xcode command-line tools with Swift 5.9 or newer.
+Requires macOS 14 or newer and Xcode with Swift 5.9 or newer. The build uses
+Xcode's `actool` to compile the standard macOS app icon asset catalog.
 
 ```sh
 ./scripts/build-app.sh
 open "dist/Photo Compressor.app"
 ```
 
-The build script checks the required privacy purpose strings, creates a locally
+The build script checks the required privacy purpose strings, compiles the app
+icon as an asset catalog plus an ICNS fallback, creates a locally
 signed `.app`, verifies both architectures and the signature, and packages a
 versioned ZIP in `dist`. The local build uses ad-hoc signing; Developer ID
 signing and notarization are not part of this script. It produces a universal
@@ -79,6 +81,11 @@ side by side. Playback, seeking, and frame stepping are linked; choose which
 version's audio to hear. Both previews use the local archives, without requesting
 another iCloud download. Source and output dimensions, frame rates, file sizes,
 and the encoding tradeoffs appear with the comparison.
+
+Controls become available when both AVPlayers are ready. Review playback uses
+AVPlayer's host-clock synchronization with automatic stall waiting disabled,
+as required by that API. Interrupted or timed-out seeks show a visible error
+and a retry action. Changing the reviewed item cancels pending seeks.
 
 - **Accept & delete original** keeps the compressed Photos copy and requests
   native macOS confirmation before removing the original.
@@ -188,8 +195,13 @@ compressed playback, history persistence after restart, deletion from History,
 and automatic **Compress & replace** after native macOS confirmation. Two
 generated test originals were each reduced from 351 KB to 116 KB; the three
 existing photos remained present and both original archives were verified.
-The new 0.1.6 Review tab, linked playback, archive restoration, and Dock icon
-assignment have been compiled and packaged but have not had a live UI test.
+The 0.1.6 review playback failure was reproduced in the UI and confirmed in the
+app log as AVPlayer's invalid synchronized-start configuration. Version 0.1.7
+adds four real-player regression tests for timeline movement, seeking/stepping,
+audio selection, missing files, and cancellation/reload. They passed on Intel.
+The corrected 0.1.7 UI, archive restoration, and Dock folder-stack icon have not
+had a live verification; the computer-use bridge failed and further UI testing
+was skipped at the user's request.
 Start with a backed-up test clip and replacement disabled before using replacement.
 
 - Ordinary, unedited single-track video is supported. Edited videos, slow-motion,

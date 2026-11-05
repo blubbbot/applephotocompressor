@@ -6,9 +6,11 @@
     <key>CFBundleName</key><string>Photo Compressor</string>
     <key>CFBundleDisplayName</key><string>Photo Compressor</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleIconFile</key><string>AppIcon.icns</string>
-    <key>CFBundleShortVersionString</key><string>0.1.6</string>
-    <key>CFBundleVersion</key><string>7</string>
+    <key>CFBundleIconFile</key><string>PhotoCompressorIcon.icns</string>
+    <key>CFBundleIconName</key><string>PhotoCompressorIcon</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleShortVersionString</key><string>0.1.7</string>
+    <key>CFBundleVersion</key><string>8</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPhotoLibraryUsageDescription</key><string>Browse and preview videos, add smaller copies, and delete only originals that you choose to replace.</string>

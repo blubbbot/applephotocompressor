@@ -8,6 +8,7 @@ let package = Package(
     targets: [
         .target(name: "CompressionCore"),
         .executableTarget(name: "PhotoCompressor", dependencies: ["CompressionCore"]),
-        .testTarget(name: "CompressionCoreTests", dependencies: ["CompressionCore"])
+        .testTarget(name: "CompressionCoreTests", dependencies: ["CompressionCore"]),
+        .testTarget(name: "PhotoCompressorTests", dependencies: ["PhotoCompressor"])
     ]
 )

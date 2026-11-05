@@ -193,3 +193,39 @@ are also checked. No app launch, Photos mutation, UI run, or encoder test run
 was performed for this release. Linked playback, native accept/revert dialogs,
 archive restoration (including interrupted restores), and the visible Dock icon
 remain unverified at runtime.
+
+## 0.1.7 fixes — 5 November 2026
+
+The 0.1.6 failure was reproduced through the computer-use bridge with the two
+existing generated test-video archives. Clicking Play left the controls
+unchanged. The app's log showed `NSInvalidArgumentException`: AVPlayer cannot
+service `setRate:time:atHostTime:` while `automaticallyWaitsToMinimizeStalling`
+is enabled. The exception also left the seek task pending, so later actions
+could appear unresponsive.
+
+Both review players now disable that automatic waiting before synchronized
+playback. Controls wait for actual player readiness, Play avoids an unnecessary
+seek when both players are already aligned, and pending seeks have cancellation
+and timeout handling with visible errors/retry. Missing files and native player
+failures are reported in the review interface.
+
+Four focused real-AVPlayer tests passed on macOS 15.8.2 Intel:
+
+- Play advances both timelines; Stop pauses both; audio selection mutes the
+  appropriate player. The test also checks the host-clock API precondition.
+- Seeking moves both actual player timelines, and frame stepping advances both.
+- A missing compressed file disables comparison and reports an error.
+- Stop/reload cancels pending playback and does not restart a new comparison.
+
+The icon is now compiled by `actool` into a standard macOS app-icon asset
+catalog plus ICNS fallback. Build metadata must match the compiler's icon
+metadata. The app updates only its own Launch Services registration on launch,
+and the package build updates the root bundle's modification date.
+
+The updated UI could not be checked on screen: the bridge subsequently failed
+with `Sky Computer Use native pipe startup failed`. The user requested
+continuing without further UI testing. No substitute UI automation was used;
+no Photos connection, import, compression, acceptance, or deletion was performed
+during this fix. The fixed playback UI and the visible Dock folder-stack icon
+remain unverified through the bridge. Universal release/package checks and
+compiled-icon asset checks are recorded for this build.

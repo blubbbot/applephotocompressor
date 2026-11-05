@@ -6,10 +6,18 @@ artwork is saved in `Resources/AppIcon.png`, with transparency preserved.
 and Retina sizes in `Resources/AppIcon.icns`. The app bundle and in-app header
 use this icon.
 
-The running app also loads `AppIcon.icns` explicitly through its bundle resource
-URL and assigns `NSApplication.applicationIconImage` at launch. The in-app header
-uses the same loaded image. This avoids relying on the Dock refreshing its cached
-generic image for earlier builds. No Dock cache is deleted or reset.
+Since 0.1.7, `scripts/build-icon-assets.sh` compiles those generated PNG sizes with
+Xcode's `actool` as the `PhotoCompressorIcon` app icon. The bundle includes both
+`Assets.car` and `PhotoCompressorIcon.icns`, and declares `CFBundleIconName` and
+`CFBundleIconFile`. This supplies the icon to Finder and Dock folder stacks,
+independently of the running application's Dock tile.
+
+The running app loads the icon named by its bundle's `CFBundleIconFile` and
+assigns `NSApplication.applicationIconImage` at launch. The in-app header uses
+the same image. On launch, the app also updates only its own Launch Services
+registration. The package build updates the bundle modification date, so an
+older registration is not reused solely because nested files were rebuilt.
+No system-wide Dock cache is deleted or reset.
 
 ## Final generation prompt
 

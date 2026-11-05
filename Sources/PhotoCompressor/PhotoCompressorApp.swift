@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreServices
 
 @main
 struct PhotoCompressorApp: App {
@@ -39,7 +40,9 @@ struct PhotoCompressorApp: App {
 
 enum AppIcon {
     static let image: NSImage? = {
-        guard let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") else { return nil }
+        let filename = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String ?? "PhotoCompressorIcon.icns"
+        let name = (filename as NSString).deletingPathExtension
+        guard let url = Bundle.main.url(forResource: name, withExtension: "icns") else { return nil }
         return NSImage(contentsOf: url)
     }()
 
@@ -52,6 +55,11 @@ enum AppIcon {
 
 final class PhotoCompressorDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Refresh this app's own registration after an update or move, so file
+        // browsers and Dock folder stacks can resolve the bundled icon too.
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            LSRegisterURL(Bundle.main.bundleURL as CFURL, true)
+        }
         AppIcon.applyToDock()
     }
 }

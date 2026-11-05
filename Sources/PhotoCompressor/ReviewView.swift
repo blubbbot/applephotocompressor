@@ -92,7 +92,10 @@ struct ReviewView: View {
                     previewPane(title: "Compressed", player: playback.compressed, facts: playback.compressedFacts, bytes: record.outputBytes, error: playback.compressedError)
                 }
                 comparisonControls
-                if !playback.loading, playback.originalError != nil || playback.compressedError != nil {
+                if let error = playback.playbackError {
+                    Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange)
+                }
+                if !playback.loading, playback.originalError != nil || playback.compressedError != nil || playback.playbackError != nil {
                     Button("Retry archived previews") { previewRevision += 1 }
                 }
                 if let before = record.originalBytes, let after = record.outputBytes, before > 0 {
@@ -153,6 +156,10 @@ struct ReviewView: View {
             }.buttonStyle(.borderless).font(.callout)
             HStack {
                 Label("Linked playback", systemImage: "link").font(.caption).foregroundStyle(.secondary)
+                if playback.loading || playback.preparingPlayback {
+                    ProgressView().controlSize(.mini)
+                    Text(playback.loading ? "Preparing previews…" : "Seeking…").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Picker("Listen to", selection: $playback.audio) { ForEach(ReviewAudio.allCases) { Text($0.rawValue).tag($0) } }
                     .frame(width: 230).controlSize(.small)
