@@ -53,6 +53,7 @@ final class AppModel: ObservableObject {
         didSet { if section == .review { player?.pause() } }
     }
     @Published var reviewFocusedID: UUID?
+    @Published var reviewPreviewExpanded = false
     @Published var reviewPrompt: ReviewPrompt?
     @Published var isReviewing = false
     @Published var notice: AppNotice?

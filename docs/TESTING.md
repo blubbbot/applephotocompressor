@@ -229,3 +229,29 @@ no Photos connection, import, compression, acceptance, or deletion was performed
 during this fix. The fixed playback UI and the visible Dock folder-stack icon
 remain unverified through the bridge. Universal release/package checks and
 compiled-icon asset checks are recorded for this build.
+
+## 0.1.8 layout changes
+
+- Library and Review now use full-width native sidebar Lists with the same
+  compact row layout, small thumbnails, and single-line middle-truncated names.
+  Hovering shows the full filename. Removed the Review List's outer inset and
+  the Library's custom row cards and preview buttons.
+- Library row selection binds to preview focus, including keyboard selection;
+  a separate native checkbox still controls batch membership.
+- Review adds a remembered Show list/Hide list preference, with a
+  Control–Command–S shortcut. Previous/Next and an item count remain available
+  without the list, as does the To review/All filter.
+- Expand previews hides the list, longer details, and idle footer, uses the
+  available comparison height, and puts review actions in the top bar. Restore
+  layout restores the previous sidebar preference. A running operation still
+  shows its footer/status; errors remain visible in the comparison.
+- The player view hierarchy and loading task identity do not depend on sidebar
+  visibility or expanded mode, so changing the layout does not request new
+  players or intentionally reset the playhead.
+
+Validation for this release is compilation of both architectures and extracted
+package verification. No new automated tests were added for these reversible
+view changes, and no app launch or native UI/Photos test was performed. The
+earlier bridge failure and request to proceed without further UI testing were
+honored. Native row interaction, expanded layout at different window sizes,
+and playback continuity during layout changes remain unverified on screen.

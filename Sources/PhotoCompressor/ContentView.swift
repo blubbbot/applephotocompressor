@@ -18,7 +18,7 @@ struct ContentView: View {
             }
             else {
                 HStack(spacing: 0) {
-                    library.frame(width: 340).frame(maxHeight: .infinity)
+                    library.frame(width: 320).frame(maxHeight: .infinity)
                     Divider()
                     detail.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
                     Divider()
@@ -26,8 +26,10 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            Divider()
-            footer
+            if model.section != .review || !model.reviewPreviewExpanded || model.isBusy {
+                Divider()
+                footer
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -148,7 +150,7 @@ struct ContentView: View {
                         Button("None") { model.selected.removeAll() }
                     }.menuStyle(.borderlessButton).fixedSize()
                 }.font(.caption).disabled(model.isBusy)
-            }.padding(18)
+            }.padding(14)
             Divider()
             if model.isLoading {
                 VStack(spacing: 12) { ProgressView(); Text(model.activity).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -166,13 +168,15 @@ struct ContentView: View {
                     }
                 }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(model.visible) { video in VideoRow(video: video).environmentObject(model) }
-                    }.padding(8)
-                }
+                List(selection: Binding<String?>(get: { model.focusedID }, set: { id in
+                    if let video = model.videos.first(where: { $0.id == id }) { model.focus(video) }
+                })) {
+                    ForEach(model.visible) { video in
+                        VideoRow(video: video).environmentObject(model).tag(video.id)
+                    }
+                }.listStyle(.sidebar)
             }
-        }.background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+        }.background(.bar)
     }
 
     private var detail: some View {
@@ -514,33 +518,32 @@ private struct VideoRow: View {
     @EnvironmentObject var model: AppModel
     let video: LibraryVideo
     var body: some View {
-        HStack(spacing: 10) {
-            Button { model.toggle(video) } label: {
-                Image(systemName: model.selected.contains(video.id) ? "checkmark.square.fill" : "square").font(.system(size: 18)).foregroundStyle(model.selected.contains(video.id) ? accent : Color.secondary.opacity(0.5))
-            }.buttonStyle(.plain).disabled(model.isBusy || video.unsupportedReason != nil).accessibilityLabel("Select \(video.name)")
-            Button { model.focus(video) } label: {
-              HStack(spacing: 10) {
-                VideoThumbnail(video: video).frame(width: 84, height: 65).clipped().clipShape(RoundedRectangle(cornerRadius: 7))
-                VStack(alignment: .leading, spacing: 5) {
-                Text(video.name).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
-                Text("\(video.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending") · \(DisplayFormat.duration(video.facts.duration))\(video.facts.isHDR ? " · HDR" : "")").font(.caption2).foregroundStyle(.secondary)
-                if let status = model.statuses[video.id] {
-                    Text(status.text).font(.caption2).foregroundStyle(status.failed ? Color.orange : accent).lineLimit(1)
-                    if let fraction = status.fraction { ProgressView(value: fraction).controlSize(.mini) }
-                } else if video.unsupportedReason != nil {
-                    Label(video.isSlowMotion ? "Slo-mo · protected" : "Original protected", systemImage: "lock.fill").font(.caption2).foregroundStyle(.orange)
-                } else if let savings = model.plan(video).estimatedSavings {
-                    Text("Save ~\(DisplayFormat.bytes(savings))").font(.caption2.weight(.medium)).foregroundStyle(accent)
-                } else { Text("~\(DisplayFormat.bytes(model.plan(video).estimatedBytes)) output").font(.caption2).foregroundStyle(accent) }
-                }
-                Spacer(minLength: 0)
-              }.contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("Preview \(video.name)")
+        HStack(spacing: 8) {
+            Toggle("Select \(video.name) for compression", isOn: Binding(get: { model.selected.contains(video.id) }, set: { _ in model.toggle(video) }))
+                .toggleStyle(.checkbox).labelsHidden()
+                .disabled(model.isBusy || video.unsupportedReason != nil)
+            VideoSidebarRow(title: video.name,
+                            detail: "\(video.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending") · \(DisplayFormat.duration(video.facts.duration))\(video.facts.isHDR ? " · HDR" : "")",
+                            status: statusText, statusColor: statusColor,
+                            progress: model.statuses[video.id]?.fraction) {
+                VideoThumbnail(video: video)
+            }
         }
-        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(model.focusedID == video.id ? accent.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 9))
+        .contentShape(Rectangle())
         .accessibilityElement(children: .contain)
         .contextMenu { VideoContextMenu(video: video).environmentObject(model) }
+    }
+
+    private var statusText: String {
+        if let status = model.statuses[video.id] { return status.text }
+        if video.unsupportedReason != nil { return video.isSlowMotion ? "Slo-mo · protected" : "Original protected" }
+        if let savings = model.plan(video).estimatedSavings { return "Save ~\(DisplayFormat.bytes(savings))" }
+        return "~\(DisplayFormat.bytes(model.plan(video).estimatedBytes)) output"
+    }
+
+    private var statusColor: Color {
+        if let status = model.statuses[video.id] { return status.failed ? .orange : .secondary }
+        return video.unsupportedReason != nil ? .orange : .secondary
     }
 }
 

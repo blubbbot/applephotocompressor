@@ -82,6 +82,20 @@ version's audio to hear. Both previews use the local archives, without requestin
 another iCloud download. Source and output dimensions, frame rates, file sizes,
 and the encoding tradeoffs appear with the comparison.
 
+Library and Review use matching native sidebar lists with compact thumbnail
+rows, single-line filenames (hover for the full name), and standard selection
+and keyboard navigation. In Library, row selection opens the preview; the
+separate checkbox chooses whether to include that video in a compression batch.
+
+In Review, **Hide list / Show list** (Control–Command–S) frees horizontal space;
+that visibility preference is remembered. **Expand previews** also hides the
+longer details and idle footer, sizes the comparison to the available window,
+and moves accept/revert actions into the top bar. **Restore layout** returns to
+the previous list visibility and full details. Previous/Next controls and the
+To review/All filter remain accessible while the list is hidden. Layout changes
+keep the current review and loaded players; error notices remain visible in
+expanded mode.
+
 Controls become available when both AVPlayers are ready. Review playback uses
 AVPlayer's host-clock synchronization with automatic stall waiting disabled,
 as required by that API. Interrupted or timed-out seeks show a visible error

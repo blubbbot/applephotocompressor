@@ -7,54 +7,36 @@ struct ReviewView: View {
     @StateObject private var playback = ReviewPlayback()
     @State private var showAll = false
     @State private var previewRevision = 0
+    @AppStorage("reviewSidebarVisible") private var sidebarVisible = true
     private let ticker = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
     private let accent = Color(red: 0.10, green: 0.43, blue: 0.34)
 
     private var records: [OperationRecord] { showAll ? model.reviewRecords : model.awaitingReview }
     private var focused: OperationRecord? { records.first { $0.id == model.reviewFocusedID } }
+    private var focusedIndex: Int? { records.firstIndex { $0.id == model.reviewFocusedID } }
+    private var showsSidebar: Bool { sidebarVisible && !model.reviewPreviewExpanded }
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Review compressed videos").font(.title3.weight(.semibold))
-                Picker("Review list", selection: $showAll) {
-                    Text("To review (\(model.awaitingReview.count))").tag(false)
-                    Text("All (\(model.reviewRecords.count))").tag(true)
-                }.pickerStyle(.segmented)
-                if records.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "checkmark.circle").font(.largeTitle).foregroundStyle(accent)
-                        Text(model.reviewRecords.isEmpty ? "Compressed copies appear here after a batch." : "All copies reviewed.")
-                            .foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        if !model.reviewRecords.isEmpty { Button("Show reviewed copies") { showAll = true } }
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List(selection: $model.reviewFocusedID) {
-                        ForEach(records) { record in
-                            VStack(alignment: .leading, spacing: 7) {
-                                Text(record.sourceName).font(.callout.weight(.medium)).lineLimit(2)
-                                Text(reviewState(record)).font(.caption).foregroundStyle(record.error == nil ? Color.secondary : .orange)
-                                if let before = record.originalBytes, let after = record.outputBytes {
-                                    Text("\(DisplayFormat.bytes(before)) → \(DisplayFormat.bytes(after))").font(.caption.monospacedDigit()).foregroundStyle(accent)
-                                }
-                            }.padding(.vertical, 7).tag(record.id)
-                        }
-                    }.listStyle(.sidebar)
-                }
-            }.padding(18).frame(width: 290).frame(maxHeight: .infinity)
-                .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+        VStack(spacing: 0) {
+            reviewToolbar
             Divider()
-            if let record = focused {
-                comparison(record).id(record.id)
-            } else {
-                ContentUnavailableView {
-                    Label(model.awaitingReview.isEmpty ? "Ready when you are" : "Choose a copy to review", systemImage: "rectangle.split.2x1")
-                } description: {
-                    Text("Compare the archived original and compressed file side by side, then accept or revert. Nothing opens automatically after compression.")
-                } actions: {
-                    Button("Back to Library") { model.section = .library }
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            HStack(spacing: 0) {
+                if showsSidebar {
+                    sidebar.frame(width: 320)
+                    Divider()
+                }
+                if let record = focused {
+                    comparison(record).id(record.id)
+                } else {
+                    ContentUnavailableView {
+                        Label(model.awaitingReview.isEmpty ? "Ready when you are" : "Choose a copy to review", systemImage: "rectangle.split.2x1")
+                    } description: {
+                        Text("Compare the archived original and compressed file side by side, then accept or revert. Nothing opens automatically after compression.")
+                    } actions: {
+                        Button("Back to Library") { model.section = .library }
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear {
             if let id = model.reviewFocusedID, model.reviewRecords.contains(where: { $0.id == id && !$0.needsReview }) { showAll = true }
@@ -72,24 +54,120 @@ struct ReviewView: View {
         .onReceive(ticker) { _ in playback.synchronize() }
     }
 
+    private var reviewToolbar: some View {
+        HStack(spacing: 14) {
+            Button {
+                if model.reviewPreviewExpanded { model.reviewPreviewExpanded = false; sidebarVisible = true }
+                else { sidebarVisible.toggle() }
+            } label: {
+                Label(showsSidebar ? "Hide list" : "Show list", systemImage: "sidebar.left")
+            }
+            .keyboardShortcut("s", modifiers: [.command, .control])
+            .help(showsSidebar ? "Hide the video list" : "Show the video list")
+            HStack(spacing: 10) {
+                Button { navigate(-1) } label: { Image(systemName: "chevron.left") }
+                    .disabled(focusedIndex == nil || focusedIndex == 0)
+                    .accessibilityLabel("Previous review video").help("Previous video")
+                Text(focusedIndex.map { "\($0 + 1) of \(records.count)" } ?? "\(records.count) videos")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Button { navigate(1) } label: { Image(systemName: "chevron.right") }
+                    .disabled(focusedIndex == nil || focusedIndex == records.count - 1)
+                    .accessibilityLabel("Next review video").help("Next video")
+            }
+            if !showsSidebar {
+                Menu {
+                    reviewFilter
+                } label: { Text(showAll ? "All copies" : "To review") }
+                .menuStyle(.borderlessButton).fixedSize()
+            }
+            Spacer(minLength: 12)
+            if model.reviewPreviewExpanded, let record = focused {
+                reviewActions(record, compact: true)
+            }
+            Button {
+                model.reviewPreviewExpanded.toggle()
+            } label: {
+                Label(model.reviewPreviewExpanded ? "Restore layout" : "Expand previews",
+                      systemImage: model.reviewPreviewExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+            }.disabled(focused == nil && !model.reviewPreviewExpanded)
+                .help(model.reviewPreviewExpanded ? "Restore the list and review details" : "Use the window for the comparison; hide the list and longer details")
+        }
+        .buttonStyle(.borderless).controlSize(.small)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private var reviewFilter: some View {
+        Picker("Review list", selection: $showAll) {
+            Text("To review (\(model.awaitingReview.count))").tag(false)
+            Text("All (\(model.reviewRecords.count))").tag(true)
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Compressed videos").font(.headline)
+                reviewFilter.pickerStyle(.segmented).labelsHidden()
+            }.padding(14)
+            Divider()
+            if records.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "checkmark.circle").font(.largeTitle).foregroundStyle(accent)
+                    Text(model.reviewRecords.isEmpty ? "Compressed copies appear here after a batch." : "All copies reviewed.")
+                        .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    if !model.reviewRecords.isEmpty { Button("Show reviewed copies") { showAll = true } }
+                }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(selection: $model.reviewFocusedID) {
+                    ForEach(records) { record in
+                        VideoSidebarRow(title: record.sourceName, detail: sizeSummary(record),
+                                        status: reviewState(record), statusColor: record.error == nil ? .secondary : .orange) {
+                            ReviewThumbnail(url: URL(fileURLWithPath: record.outputPath))
+                        }.tag(record.id)
+                    }
+                }.listStyle(.sidebar)
+            }
+        }.frame(maxHeight: .infinity).background(.bar)
+    }
+
+    private func navigate(_ offset: Int) {
+        guard let index = focusedIndex, records.indices.contains(index + offset) else { return }
+        model.reviewFocusedID = records[index + offset].id
+    }
+
+    private func sizeSummary(_ record: OperationRecord) -> String {
+        guard let before = record.originalBytes, let after = record.outputBytes else { return "File sizes unavailable" }
+        return "\(DisplayFormat.bytes(before)) → \(DisplayFormat.bytes(after))"
+    }
+
     private func comparison(_ record: OperationRecord) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+        GeometryReader { viewport in
+            let padding: CGFloat = model.reviewPreviewExpanded ? 16 : 24
+            let paneWidth = max(1, (viewport.size.width - padding * 2 - 16) / 2)
+            let previewHeight = model.reviewPreviewExpanded ? max(140, viewport.size.height - 220) : paneWidth * 10 / 16
+            ScrollView {
+            VStack(alignment: .leading, spacing: model.reviewPreviewExpanded ? 12 : 18) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(record.sourceName).font(.title2.weight(.semibold)).textSelection(.enabled)
-                        Text("\(record.startedAt.formatted()) · \(reviewState(record))").font(.caption).foregroundStyle(.secondary)
+                        Text(record.sourceName).font(model.reviewPreviewExpanded ? .headline : .title2.weight(.semibold))
+                            .lineLimit(1).truncationMode(.middle).help(record.sourceName).textSelection(.enabled)
+                        if !model.reviewPreviewExpanded {
+                            Text("\(record.startedAt.formatted()) · \(reviewState(record))").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
                     Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.backupPath), URL(fileURLWithPath: record.outputPath)]) } label: {
                         Label("Archive in Finder", systemImage: "folder")
                     }
                 }
-                Text("Both previews use the local archived files. Play, seek, and step through the same moment together.")
-                    .font(.callout).foregroundStyle(.secondary)
+                if !model.reviewPreviewExpanded {
+                    Text("Both previews use the local archived files. Play, seek, and step through the same moment together.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 HStack(alignment: .top, spacing: 16) {
-                    previewPane(title: "Original", player: playback.original, facts: playback.originalFacts, bytes: record.originalBytes, error: playback.originalError)
-                    previewPane(title: "Compressed", player: playback.compressed, facts: playback.compressedFacts, bytes: record.outputBytes, error: playback.compressedError)
+                    previewPane(title: "Original", player: playback.original, facts: playback.originalFacts, bytes: record.originalBytes, error: playback.originalError, height: previewHeight)
+                    previewPane(title: "Compressed", player: playback.compressed, facts: playback.compressedFacts, bytes: record.outputBytes, error: playback.compressedError, height: previewHeight)
                 }
                 comparisonControls
                 if let error = playback.playbackError {
@@ -98,35 +176,40 @@ struct ReviewView: View {
                 if !playback.loading, playback.originalError != nil || playback.compressedError != nil || playback.playbackError != nil {
                     Button("Retry archived previews") { previewRevision += 1 }
                 }
-                if let before = record.originalBytes, let after = record.outputBytes, before > 0 {
-                    Label("\(DisplayFormat.bytes(before - after)) smaller · \(Int((Double(before - after) / Double(before) * 100).rounded()))% file-size reduction", systemImage: "arrow.down.right.and.arrow.up.left")
-                        .font(.headline).foregroundStyle(accent)
-                }
-                if let facts = playback.originalFacts ?? record.sourceFacts {
-                    let video = LibraryVideo(id: record.sourceID, name: record.sourceName, asset: nil, fileURL: URL(fileURLWithPath: record.backupPath), facts: facts,
-                                             date: record.startedAt, unsupportedReason: nil, factsAreMeasured: true)
-                    CompressionImpactView(video: video, settings: record.settings, reviewingFinishedCopy: true)
-                }
                 if let error = record.error { Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-                Divider()
-                reviewActions(record)
-                if record.isPhotosOperation {
-                    HStack {
-                        if record.stage != .originalDeleted && record.stage != .reverting || record.restoredOriginalID != nil {
-                            Button("Show original in Photos") { model.showInPhotos(id: record.restoredOriginalID ?? record.sourceID) }
-                        }
-                        if let id = record.replacementID, record.stage != .reverted {
-                            Button("Show compressed copy in Photos") { model.showInPhotos(id: id) }
-                        }
-                    }.controlSize(.small).disabled(!model.connected || model.isBusy)
-                }
-                Text("Both local archives are retained. Photos deletions require macOS confirmation; Recently Deleted is never emptied by this app.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.padding(24)
+                if !model.reviewPreviewExpanded { reviewDetails(record) }
+            }.padding(padding).frame(maxWidth: .infinity, alignment: .topLeading)
+            }.frame(width: viewport.size.width, height: viewport.size.height)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func previewPane(title: String, player: AVPlayer?, facts: VideoFacts?, bytes: Int64?, error: String?) -> some View {
+    @ViewBuilder private func reviewDetails(_ record: OperationRecord) -> some View {
+        if let before = record.originalBytes, let after = record.outputBytes, before > 0 {
+            Label("\(DisplayFormat.bytes(before - after)) smaller · \(Int((Double(before - after) / Double(before) * 100).rounded()))% file-size reduction", systemImage: "arrow.down.right.and.arrow.up.left")
+                .font(.headline).foregroundStyle(accent)
+        }
+        if let facts = playback.originalFacts ?? record.sourceFacts {
+            let video = LibraryVideo(id: record.sourceID, name: record.sourceName, asset: nil, fileURL: URL(fileURLWithPath: record.backupPath), facts: facts,
+                                     date: record.startedAt, unsupportedReason: nil, factsAreMeasured: true)
+            CompressionImpactView(video: video, settings: record.settings, reviewingFinishedCopy: true)
+        }
+        Divider()
+        reviewActions(record)
+        if record.isPhotosOperation {
+            HStack {
+                if record.stage != .originalDeleted && record.stage != .reverting || record.restoredOriginalID != nil {
+                    Button("Show original in Photos") { model.showInPhotos(id: record.restoredOriginalID ?? record.sourceID) }
+                }
+                if let id = record.replacementID, record.stage != .reverted {
+                    Button("Show compressed copy in Photos") { model.showInPhotos(id: id) }
+                }
+            }.controlSize(.small).disabled(!model.connected || model.isBusy)
+        }
+        Text("Both local archives are retained. Photos deletions require macOS confirmation; Recently Deleted is never emptied by this app.")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func previewPane(title: String, player: AVPlayer?, facts: VideoFacts?, bytes: Int64?, error: String?, height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack { Text(title).font(.headline); Spacer(); Text(bytes.map(DisplayFormat.bytes) ?? "Size unknown").font(.callout.monospacedDigit()).foregroundStyle(.secondary) }
             ZStack {
@@ -134,7 +217,7 @@ struct ReviewView: View {
                 if let player { NativeVideoPlayer(player: player).clipShape(RoundedRectangle(cornerRadius: 12)) }
                 else if playback.loading { ProgressView().tint(.white) }
                 else { Text(error ?? "Preview unavailable").font(.caption).foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center).padding(20) }
-            }.aspectRatio(16 / 10, contentMode: .fit)
+            }.frame(height: height)
             if let facts {
                 Text("\(facts.width) × \(facts.height) · \(facts.frameRate.formatted(.number.precision(.fractionLength(0...2)))) fps\(facts.isHDR ? " · HDR" : "")")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -167,22 +250,24 @@ struct ReviewView: View {
         }.disabled(!playback.canCompare)
     }
 
-    @ViewBuilder private func reviewActions(_ record: OperationRecord) -> some View {
+    @ViewBuilder private func reviewActions(_ record: OperationRecord, compact: Bool = false) -> some View {
         if record.stage == .reverted {
             Label("Reverted · the original is kept", systemImage: "arrow.uturn.backward.circle").foregroundStyle(accent)
         } else {
             if record.isPhotosOperation && !model.connected {
                 HStack {
-                    Text("Connect Photos to accept or revert this copy. Archived previews are available without connecting.").font(.callout).foregroundStyle(.secondary)
-                    Spacer()
+                    if !compact {
+                        Text("Connect Photos to accept or revert this copy. Archived previews are available without connecting.").font(.callout).foregroundStyle(.secondary)
+                        Spacer()
+                    }
                     Button("Connect Photos") { model.connect() }.disabled(model.isBusy || model.isLoading || model.indexingSizes)
                 }
             }
             HStack(spacing: 14) {
-                Button(record.stage == .reverting ? "Retry revert…" : "Revert compression…", role: .destructive) {
+                Button(record.stage == .reverting ? "Retry revert…" : compact ? "Revert…" : "Revert compression…", role: .destructive) {
                     playback.stop(); model.requestRevert(record)
                 }
-                Spacer()
+                if !compact { Spacer() }
                 if record.reviewDecision == .accepted {
                     Label("Accepted", systemImage: "checkmark.circle.fill").foregroundStyle(accent)
                 } else if record.stage != .reverting {
@@ -190,9 +275,11 @@ struct ReviewView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(record.isPhotosOperation && record.stage != .originalDeleted && !record.isDeletionCandidate)
                 }
-            }.controlSize(.large).disabled(model.isBusy || record.isPhotosOperation && !model.connected)
-            Text(record.stage == .reverting ? "Finish the interrupted revert to keep the original and remove the compressed Photos copy." : record.isPhotosOperation ? record.stage == .originalDeleted ? "The original has already been replaced in Photos. Accept marks this copy as reviewed; revert restores the archived original before removing the compressed copy." : "Accept keeps the smaller Photos copy and deletes its original after macOS confirmation. Revert keeps the original and removes only the compressed Photos copy." : "Local originals stay in place. Accept or revert records your decision; both archived files are retained.")
-                .font(.caption).foregroundStyle(.secondary)
+            }.controlSize(compact ? .small : .large).disabled(model.isBusy || record.isPhotosOperation && !model.connected)
+            if !compact {
+                Text(record.stage == .reverting ? "Finish the interrupted revert to keep the original and remove the compressed Photos copy." : record.isPhotosOperation ? record.stage == .originalDeleted ? "The original has already been replaced in Photos. Accept marks this copy as reviewed; revert restores the archived original before removing the compressed copy." : "Accept keeps the smaller Photos copy and deletes its original after macOS confirmation. Revert keeps the original and removes only the compressed Photos copy." : "Local originals stay in place. Accept or revert records your decision; both archived files are retained.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
