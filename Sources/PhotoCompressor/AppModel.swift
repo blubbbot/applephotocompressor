@@ -619,6 +619,7 @@ final class AppModel: ObservableObject {
         guard let journal else { return }
         var candidates: [(OperationRecord, PHAsset)] = []
         for record in records {
+            if !markReviewed && cancellation.isCancelled { return }
             do {
                 var verified = record
                 if let id = record.replacementID, let replacement = PhotosService.fetch(id),
@@ -648,6 +649,9 @@ final class AppModel: ObservableObject {
             }
         }
         guard !candidates.isEmpty else { return }
+        // Revalidation may await a resource download. A stop requested during
+        // that await must still prevent automatic deletion of prepared originals.
+        guard markReviewed || !cancellation.isCancelled else { return }
         activity = "Confirm original deletion in the macOS Photos dialog…"
         do {
             try await PhotosService.delete(candidates.map(\.1))

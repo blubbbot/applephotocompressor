@@ -306,3 +306,11 @@ photo resources, and the new UI remain unverified live. The earlier user request
 to proceed without computer-use testing was retained. Release validation also
 checks both architectures, extracted signature/privacy/icon resources, and the
 public download checksum.
+
+### 0.2.1 follow-up
+
+Automatic deletion rechecks the batch cancellation flag between candidates and
+after any asynchronous replacement revalidation, before asking Photos to delete.
+This keeps Stop safely effective if it is requested during a copy-resource
+download. Explicit accept/history deletion remains a separate user action.
+The follow-up is compiled and package-verified; no live deletion test was run.
