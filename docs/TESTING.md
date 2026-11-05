@@ -255,3 +255,54 @@ view changes, and no app launch or native UI/Photos test was performed. The
 earlier bridge failure and request to proceed without further UI testing were
 honored. Native row interaction, expanded layout at different window sizes,
 and playback continuity during layout changes remain unverified on screen.
+
+## 0.2.0 — savings, ordering, sharing hints, and Photos
+
+Savings now have a green bytes/percentage badge. Inspection numbers update
+immediately; a stable list-order snapshot delays sorting until two seconds after
+the latest navigation or measurement. Explicit sort/settings changes apply
+immediately. Tests cover unchanged keyboard neighbors while updates are pending,
+stable ties/dataset changes, and added/removed rows.
+
+Shared Library research checked the public Photos SDK and the Photos scripting
+dictionary. Shared Albums are detectable and remain protected, but neither
+interface supplies iCloud Shared Photo Library membership or a supported move
+operation. Review and replacement settings explain that limitation and link to
+manual re-sharing in Photos. Automatic replacement asks once per session whether
+to proceed or keep originals for review. Modified tracked replacements require
+resource hash and supported metadata revalidation; the Shared Library move
+itself and that live-resource revalidation have not been tested in a library.
+
+The header selects Videos (default on launch) or Photos. Photos has separate
+quality, long-edge, minimum-savings, filter, and replacement preferences;
+replacement starts off. Ordinary single-image JPEG/HEIC SDR sources use Image I/O
+HEIC encoding. Resource-level HDR/gain-map/depth checks and catalog protection
+retain unsupported, edited, burst, RAW, and other compound assets.
+
+Live Photos preserve their original movie by default. The still and movie are
+archived separately; both resource totals count toward savings. Both the
+original and recompressed pair must load successfully through `PHLivePhoto`
+before import. Imported Live status and supported metadata are verified. Explicit
+still conversion retains the complete original pair in the archive. Review and
+revert know which resources belong to each version, including restoring Live
+status after a still conversion.
+
+`swift test` passed **29 tests** on Intel, including:
+
+- JPEG → HEIC with orientation, EXIF capture time, and GPS retained.
+- HEIC → HEIC re-encoding; PNG rejection; resized orientation; no upscaling;
+  cancellation and no overwriting existing files.
+- Live Photo archive totals, required motion manifest, still-conversion recovery
+  requirements, backward-compatible journal fields, and stable list ordering.
+- A generated JPEG/QuickTime Live Photo pair that loaded before and after HEIC
+  re-encoding of its still. The original motion bytes remained identical.
+- Existing real HEVC/HDR/audio/portrait encoding, player playback/cancellation,
+  operation-journal, and packaging regressions.
+
+No user-library asset was imported, compressed, edited, or deleted by these
+tests. No app UI was launched. Real iPhone Live Photos, Photos import/subtype
+readback, photo acceptance/reversion, shared membership/manual moves, cloud-only
+photo resources, and the new UI remain unverified live. The earlier user request
+to proceed without computer-use testing was retained. Release validation also
+checks both architectures, extracted signature/privacy/icon resources, and the
+public download checksum.

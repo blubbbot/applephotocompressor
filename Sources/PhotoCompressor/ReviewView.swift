@@ -47,11 +47,11 @@ struct ReviewView: View {
             if let id, !records.contains(where: { $0.id == id }), model.reviewRecords.contains(where: { $0.id == id }) { showAll = true }
         }
         .task(id: "\(focused?.id.uuidString ?? "none")-\(previewRevision)") {
-            if let record = focused { await playback.load(record) }
+            if let record = focused, !record.kind.isPhoto { await playback.load(record) }
             else { playback.stop() }
         }
         .onDisappear { playback.stop() }
-        .onReceive(ticker) { _ in playback.synchronize() }
+        .onReceive(ticker) { _ in if focused?.kind.isPhoto != true { playback.synchronize() } }
     }
 
     private var reviewToolbar: some View {
@@ -107,7 +107,7 @@ struct ReviewView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Compressed videos").font(.headline)
+                Text("Compressed \(model.mediaMode.rawValue.lowercased())").font(.headline)
                 reviewFilter.pickerStyle(.segmented).labelsHidden()
             }.padding(14)
             Divider()
@@ -122,8 +122,8 @@ struct ReviewView: View {
                 List(selection: $model.reviewFocusedID) {
                     ForEach(records) { record in
                         VideoSidebarRow(title: record.sourceName, detail: sizeSummary(record),
-                                        status: reviewState(record), statusColor: record.error == nil ? .secondary : .orange) {
-                            ReviewThumbnail(url: URL(fileURLWithPath: record.outputPath))
+                                        status: reviewState(record), savings: savingsSummary(record), statusColor: record.error == nil ? .secondary : .orange) {
+                            ReviewThumbnail(url: URL(fileURLWithPath: record.outputPath), isPhoto: record.kind.isPhoto)
                         }.tag(record.id)
                     }
                 }.listStyle(.sidebar)
@@ -141,11 +141,17 @@ struct ReviewView: View {
         return "\(DisplayFormat.bytes(before)) → \(DisplayFormat.bytes(after))"
     }
 
+    private func savingsSummary(_ record: OperationRecord) -> String? {
+        guard let before = record.originalBytes, let after = record.outputBytes, before > after else { return nil }
+        return "\(DisplayFormat.bytes(before - after)) smaller · \(Int((Double(before - after) / Double(before) * 100).rounded()))%"
+    }
+
     private func comparison(_ record: OperationRecord) -> some View {
         GeometryReader { viewport in
             let padding: CGFloat = model.reviewPreviewExpanded ? 16 : 24
             let paneWidth = max(1, (viewport.size.width - padding * 2 - 16) / 2)
-            let previewHeight = model.reviewPreviewExpanded ? max(140, viewport.size.height - 220) : paneWidth * 10 / 16
+            let reserved: CGFloat = record.isPhotosOperation ? 300 : 220
+            let previewHeight = model.reviewPreviewExpanded ? max(140, viewport.size.height - reserved) : paneWidth * 10 / 16
             ScrollView {
             VStack(alignment: .leading, spacing: model.reviewPreviewExpanded ? 12 : 18) {
                 HStack(alignment: .top) {
@@ -161,19 +167,27 @@ struct ReviewView: View {
                         Label("Archive in Finder", systemImage: "folder")
                     }
                 }
+                if record.isPhotosOperation {
+                    SharedLibraryNotice(replacementID: record.stage == .reverted ? (record.restoredOriginalID ?? record.sourceID) : record.replacementID,
+                                        compact: model.reviewPreviewExpanded, restoredOriginal: record.stage == .reverted).environmentObject(model)
+                }
                 if !model.reviewPreviewExpanded {
-                    Text("Both previews use the local archived files. Play, seek, and step through the same moment together.")
+                    Text(record.kind.isPhoto ? "Both previews use the archived image resources. Live Photo motion controls appear below the images." : "Both previews use the local archived files. Play, seek, and step through the same moment together.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                HStack(alignment: .top, spacing: 16) {
+                if record.kind.isPhoto {
+                    PhotoComparison(record: record, height: previewHeight)
+                } else {
+                  HStack(alignment: .top, spacing: 16) {
                     previewPane(title: "Original", player: playback.original, facts: playback.originalFacts, bytes: record.originalBytes, error: playback.originalError, height: previewHeight)
                     previewPane(title: "Compressed", player: playback.compressed, facts: playback.compressedFacts, bytes: record.outputBytes, error: playback.compressedError, height: previewHeight)
                 }
                 comparisonControls
-                if let error = playback.playbackError {
+                }
+                if !record.kind.isPhoto, let error = playback.playbackError {
                     Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange)
                 }
-                if !playback.loading, playback.originalError != nil || playback.compressedError != nil || playback.playbackError != nil {
+                if !record.kind.isPhoto, !playback.loading, playback.originalError != nil || playback.compressedError != nil || playback.playbackError != nil {
                     Button("Retry archived previews") { previewRevision += 1 }
                 }
                 if let error = record.error { Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
@@ -188,7 +202,12 @@ struct ReviewView: View {
             Label("\(DisplayFormat.bytes(before - after)) smaller · \(Int((Double(before - after) / Double(before) * 100).rounded()))% file-size reduction", systemImage: "arrow.down.right.and.arrow.up.left")
                 .font(.headline).foregroundStyle(accent)
         }
-        if let facts = playback.originalFacts ?? record.sourceFacts {
+        if record.kind.isPhoto {
+            Text("Lossy HEIC photo · quality \(Int((record.photoSettings?.quality ?? 0.8) * 100))% · \(record.photoSettings?.resolution.rawValue ?? "Original") resolution")
+                .font(.headline)
+            Text("The image was re-encoded, so detail can change even at original resolution. Supported library metadata is restored and checked. HDR/depth/RAW and edited photos are protected rather than flattened.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else if let facts = playback.originalFacts ?? record.sourceFacts {
             let video = LibraryVideo(id: record.sourceID, name: record.sourceName, asset: nil, fileURL: URL(fileURLWithPath: record.backupPath), facts: facts,
                                      date: record.startedAt, unsupportedReason: nil, factsAreMeasured: true)
             CompressionImpactView(video: video, settings: record.settings, reviewingFinishedCopy: true)

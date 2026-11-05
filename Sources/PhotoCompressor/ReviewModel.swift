@@ -91,7 +91,7 @@ extension AppModel {
                     videos.append(LibraryVideo(id: id, name: reverting.sourceName, asset: asset, fileURL: nil,
                                                facts: reverting.sourceFacts ?? VideoFacts(width: asset.pixelWidth, height: asset.pixelHeight, duration: asset.duration, bytes: reverting.originalBytes),
                                                date: asset.creationDate ?? record.startedAt, unsupportedReason: PhotosService.protectionReason(for: asset),
-                                               factsAreMeasured: reverting.sourceFacts != nil))
+                                               factsAreMeasured: reverting.sourceFacts != nil, kind: reverting.kind))
                 }
                 if focusedID == reverting.sourceID { player?.pause(); player = nil; focusedID = nil }
                 activity = "Reverted · original kept; local archives retained"
@@ -112,7 +112,8 @@ extension AppModel {
     }
 
     private func verifyReviewFiles(_ record: OperationRecord) throws {
-        for (path, bytes) in [(record.backupPath, record.originalBytes), (record.outputPath, record.outputBytes)] {
+        guard record.completePhotoResources else { throw MediaError.invalid("The photo archive manifest is incomplete. No Photos item was removed.") }
+        for (path, bytes) in record.archiveFiles {
             guard !path.isEmpty, let bytes, bytes > 0,
                   let size = try URL(fileURLWithPath: path).resourceValues(forKeys: [.fileSizeKey]).fileSize,
                   Int64(size) == bytes else {
@@ -124,10 +125,14 @@ extension AppModel {
     private func restoreAndRemoveCopy(_ record: inout OperationRecord) async throws {
         guard let journal, let replacementID = record.replacementID, replacementID != record.sourceID,
               record.restoredOriginalID != replacementID else { throw MediaError.invalid("This operation has no distinct compressed Photos copy to revert.") }
+        if let expected = record.replacementModifiedAt, let copy = PhotosService.fetch(replacementID), copy.modificationDate != expected {
+            record.replacementModifiedAt = try await PhotosService.revalidateChangedReplacement(record, original: PhotosService.fetch(record.restoredOriginalID ?? record.sourceID))
+            try await journal.save(record)
+        }
         let replacement = PhotosService.fetch(replacementID)
         if let replacement {
             let resources = PHAssetResource.assetResources(for: replacement)
-            guard resources.contains(where: { $0.type == .video && $0.originalFilename == URL(fileURLWithPath: record.outputPath).lastPathComponent }),
+            guard resources.contains(where: { $0.type == (record.kind.isPhoto ? .photo : .video) && $0.originalFilename == URL(fileURLWithPath: record.outputPath).lastPathComponent }),
                   record.replacementModifiedAt == nil || replacement.modificationDate == record.replacementModifiedAt else {
                 throw MediaError.invalid("The compressed Photos copy has changed since it was imported. Review its changes in Photos before deleting it manually; the app has kept both versions.")
             }
@@ -138,7 +143,7 @@ extension AppModel {
         }
         if original == nil, record.restoredOriginalID == nil {
             // Recover a Photos import that succeeded before its ID was journaled.
-            if let recovered = try await PhotosService.restoredVideo(named: record.restorationFilename) {
+            if let recovered = try await PhotosService.restoredVideo(named: record.restorationFilename, photos: record.kind.isPhoto) {
                 original = recovered; record.restoredOriginalID = recovered.localIdentifier
                 try await journal.save(record)
             }
@@ -150,7 +155,8 @@ extension AppModel {
             activity = "Restoring full original from its archive…"
             let albums = PhotosService.regularAlbums(containing: replacement)
             let id = try await PhotosService.importVideo(URL(fileURLWithPath: record.backupPath), original: replacement,
-                                                       albums: albums, resourceFilename: record.restorationFilename)
+                                                       albums: albums, resourceFilename: record.restorationFilename,
+                                                       pairedVideo: record.kind == .livePhoto ? record.pairedVideoPath.map { URL(fileURLWithPath: $0) } : nil)
             record.restoredOriginalID = id
             try await journal.save(record)
             original = PhotosService.fetch(id)
@@ -162,7 +168,8 @@ extension AppModel {
                 return
             }
             let albums = PhotosService.regularAlbums(containing: replacement)
-            try PhotosService.verifyImport(original.localIdentifier, original: replacement, albums: albums)
+            try PhotosService.verifyImport(original.localIdentifier, original: replacement, albums: albums,
+                                           expectedLive: record.kind.isPhoto ? record.kind == .livePhoto : nil)
             if record.restoredOriginalVerified != true {
                 let metadata: LibraryTextMetadata
                 if let saved = record.sourceTextMetadata { metadata = saved }

@@ -40,6 +40,13 @@ struct ContentView: View {
             Button("Download and inspect") { model.confirmInspection(prompt) }
             Button("Cancel", role: .cancel) { model.inspectionPrompt = nil }
         } message: { prompt in Text(prompt.message) }
+        .confirmationDialog("Shared Library membership cannot be preserved automatically", isPresented: $model.sharedLibraryReplacementPrompt, titleVisibility: .visible) {
+            Button("Compress copies for review") { model.startBatch(keepOriginals: true) }
+            Button("Replace automatically anyway", role: .destructive) { model.confirmAutomaticReplacement() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The app cannot read or restore iCloud Shared Photo Library placement. A smaller copy may be in your Personal Library. If an original is shared, move its copy back in Photos before deleting it. Choose review to keep originals until you check, or acknowledge automatic replacement for this session.")
+        }
         .confirmationDialog("Revert compression?", isPresented: Binding(get: { model.reviewPrompt != nil }, set: { if !$0 { model.reviewPrompt = nil } }), titleVisibility: .visible, presenting: model.reviewPrompt) { prompt in
             Button(prompt.isPhotosOperation ? "Keep original & remove compressed Photos copy" : "Revert compression", role: .destructive) { model.confirmRevert(prompt) }
             Button("Cancel", role: .cancel) { model.reviewPrompt = nil }
@@ -62,6 +69,10 @@ struct ContentView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            Picker("Media", selection: Binding(get: { model.mediaMode }, set: { model.switchMediaMode($0) })) {
+                ForEach(MediaMode.allCases) { Text($0.rawValue).tag($0) }
+            }.labelsHidden().pickerStyle(.menu).frame(width: 105)
+                .disabled(model.isBusy || model.isLoading || model.indexingSizes)
             Picker("Workspace", selection: $model.section) {
                 Text("Library").tag(AppSection.library)
                 Text(model.awaitingReview.isEmpty ? "Review" : "Review (\(model.awaitingReview.count))").tag(AppSection.review)
@@ -70,7 +81,7 @@ struct ContentView: View {
             Button { model.showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
             Menu {
                 Button("Connect Photos Library…") { model.connect() }
-                Button("Open Video Files…") { model.openFiles() }
+                Button(model.mediaMode == .photos ? "Open Photo Files…" : "Open Video Files…") { model.openFiles() }
                 Button("Explore Sample Library") { model.loadDemo() }
             } label: { Label(model.connected ? "Refresh library" : "Open library", systemImage: model.connected ? "arrow.clockwise" : "photo.on.rectangle") }
             .fixedSize()
@@ -83,12 +94,12 @@ struct ContentView: View {
         VStack(spacing: 20) {
             Spacer()
             Image(systemName: "photo.stack").font(.system(size: 58, weight: .ultraLight)).foregroundStyle(accent)
-            Text("Keep the moments. Make some room.").font(.system(size: 30, weight: .semibold, design: .rounded))
-            Text("Find large videos, preview the difference, and replace them with smaller copies.\nYou choose the quality. Originals are archived before deletion.")
+            Text(model.mediaMode == .photos ? "Smaller photos. Keep the moment." : "Keep the moments. Make some room.").font(.system(size: 30, weight: .semibold, design: .rounded))
+            Text(model.mediaMode == .photos ? "Compress ordinary JPEG/HEIC photos and supported Live Photos.\nKeep motion by default, or explicitly convert to stills. Originals are archived." : "Find large videos, preview the difference, and replace them with smaller copies.\nYou choose the quality. Originals are archived before deletion.")
                 .font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(5)
             HStack(spacing: 12) {
                 Button("Connect Photos Library") { model.connect() }.buttonStyle(.borderedProminent).controlSize(.large)
-                Button("Open Video Files…") { model.openFiles() }.controlSize(.large)
+                Button(model.mediaMode == .photos ? "Open Photo Files…" : "Open Video Files…") { model.openFiles() }.controlSize(.large)
             }
             Button("Explore a sample library") { model.loadDemo() }.buttonStyle(.link).padding(.top, 4)
             HStack(spacing: 32) {
@@ -102,9 +113,9 @@ struct ContentView: View {
 
     private var emptyLibrary: some View {
         ContentUnavailableView {
-            Label("No videos in this Photos library", systemImage: "film.stack")
+            Label("No \(model.mediaMode.rawValue.lowercased()) in this Photos library", systemImage: model.mediaMode == .photos ? "photo.stack" : "film.stack")
         } description: {
-            Text("Your Photos library is connected. Import a video in Photos, then refresh to begin.")
+            Text("Your Photos library is connected. Import a \(model.mediaMode == .photos ? "photo" : "video") in Photos, then refresh to begin.")
         } actions: {
             Button("Refresh library") { model.connect() }
                 .disabled(model.isBusy || model.isLoading || model.indexingSizes)
@@ -117,14 +128,19 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Your videos").font(.title3.weight(.semibold))
+                    Text("Your \(model.mediaMode.rawValue.lowercased())").font(.title3.weight(.semibold))
                     Text("\(model.visible.count)").font(.caption.monospacedDigit()).padding(.horizontal, 7).padding(.vertical, 3).background(.quaternary, in: Capsule())
                     Spacer()
                     Menu {
-                        Picker("Sort", selection: $model.sort) { ForEach(VideoSort.allCases) { Text($0.rawValue).tag($0) } }
+                        Picker("Sort", selection: $model.sort) { ForEach(VideoSort.allCases.filter { model.mediaMode == .videos || $0 != .longest }) { Text($0.rawValue).tag($0) } }
                         Divider()
                         Picker("Minimum original size", selection: $model.minimumSize) {
-                            Text("Any size").tag(Int64(0)); Text("Over 100 MB").tag(Int64(100_000_000)); Text("Over 500 MB").tag(Int64(500_000_000)); Text("Over 1 GB").tag(Int64(1_000_000_000))
+                            Text("Any size").tag(Int64(0))
+                            if model.mediaMode == .photos {
+                                Text("Over 2 MB").tag(Int64(2_000_000)); Text("Over 5 MB").tag(Int64(5_000_000)); Text("Over 10 MB").tag(Int64(10_000_000))
+                            } else {
+                                Text("Over 100 MB").tag(Int64(100_000_000)); Text("Over 500 MB").tag(Int64(500_000_000)); Text("Over 1 GB").tag(Int64(1_000_000_000))
+                            }
                         }
                         Toggle("Hide unsupported videos", isOn: $model.hideUnsupported)
                         Toggle("Hide processed videos", isOn: $model.hideProcessed)
@@ -133,7 +149,7 @@ struct ContentView: View {
                 }
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search videos", text: $model.search).textFieldStyle(.plain)
+                    TextField("Search \(model.mediaMode.rawValue.lowercased())", text: $model.search).textFieldStyle(.plain)
                 }.padding(9).background(surface, in: RoundedRectangle(cornerRadius: 8))
                 if model.slowMotionCount > 0 {
                     Button {
@@ -150,6 +166,14 @@ struct ContentView: View {
                         Button("None") { model.selected.removeAll() }
                     }.menuStyle(.borderlessButton).fixedSize()
                 }.font(.caption).disabled(model.isBusy)
+                HStack {
+                    Text(model.listOrderPending ? "Updated estimates · sorting delayed" : "Sort updates after browsing pauses")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Button { model.updateListOrderNow() } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.borderless).help("Apply updated order now")
+                        .disabled(!model.listOrderPending)
+                }.frame(height: 16)
             }.padding(14)
             Divider()
             if model.isLoading {
@@ -157,7 +181,7 @@ struct ContentView: View {
             } else if model.visible.isEmpty {
                 VStack(spacing: 14) {
                     Image(systemName: "film").font(.system(size: 38)).foregroundStyle(.secondary)
-                    Text("No matching videos").font(.title2.weight(.semibold))
+                    Text("No matching \(model.mediaMode.rawValue.lowercased())").font(.title2.weight(.semibold))
                     Text("Change the filters or show processed videos.")
                         .foregroundStyle(.secondary).multilineTextAlignment(.center)
                     if !model.search.isEmpty || model.minimumSize > 0 {
@@ -181,7 +205,9 @@ struct ContentView: View {
 
     private var detail: some View {
         ScrollView {
-            if let video = model.focused {
+            if let video = model.focused, video.kind.isPhoto {
+                PhotoDetailView(photo: video).environmentObject(model)
+            } else if let video = model.focused {
                 VStack(alignment: .leading, spacing: 20) {
                     HStack {
                         Text("Preview").font(.headline)
@@ -233,7 +259,7 @@ struct ContentView: View {
                         estimateCard(video)
                         compressionImpact(video)
                         VStack(alignment: .leading, spacing: 9) {
-                            Label("Dates, location, favorites, albums, titles & captions", systemImage: "checkmark.shield").foregroundStyle(accent)
+                            Label("Dates, location, favorites, regular albums, titles & captions", systemImage: "checkmark.shield").foregroundStyle(accent)
                             Text("Library fields are restored and checked before an original can be deleted. People tags and editable history do not transfer.").foregroundStyle(.secondary)
                         }.font(.caption).lineSpacing(3)
                     }
@@ -310,29 +336,33 @@ struct ContentView: View {
     private var settings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 21) {
-                VStack(alignment: .leading, spacing: 5) { Text("Compression").font(.title3.weight(.semibold)); Text("Your settings, for every selected video.").font(.caption).foregroundStyle(.secondary) }
-                VStack(alignment: .leading, spacing: 14) {
-                    settingLabel("Maximum resolution", symbol: "arrow.down.right.and.arrow.up.left")
-                    Picker("Resolution", selection: $model.settings.resolution) { ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
-                    settingLabel("Maximum frame rate", symbol: "film")
-                    Picker("Frame rate", selection: $model.settings.frameRate) { ForEach(FrameRate.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
-                    Text("Smaller sources keep their resolution and frame rate.").font(.caption2).foregroundStyle(.secondary)
-                    Text("Original frame rate is the default. Choose a lower cap only when you want to remove frames. Slo-mo videos stay protected.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                Divider()
-                VStack(alignment: .leading, spacing: 12) {
-                    settingLabel("Picture quality", symbol: "slider.horizontal.3")
-                    Picker("Quality", selection: $model.settings.quality) { ForEach(Quality.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().disabled(model.settings.useCustomBitrate)
-                    Text(model.settings.pictureQualityExplanation).font(.caption2).foregroundStyle(.secondary)
-                    Text("HEVC encoding is lossy, including with Original resolution and frame rate.").font(.caption2).foregroundStyle(.secondary)
-                    Toggle("Set video bitrate manually", isOn: $model.settings.useCustomBitrate).font(.caption)
-                    if model.settings.useCustomBitrate {
-                        HStack { Slider(value: $model.settings.bitrateMbps, in: 0.5...30, step: 0.5); Text("\(model.settings.bitrateMbps, specifier: "%.1f") Mbps").font(.caption.monospacedDigit()).frame(width: 65) }
+                if model.mediaMode == .photos {
+                    PhotoSettingsView().environmentObject(model)
+                } else {
+                    VStack(alignment: .leading, spacing: 5) { Text("Compression").font(.title3.weight(.semibold)); Text("Your settings, for every selected video.").font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading, spacing: 14) {
+                        settingLabel("Maximum resolution", symbol: "arrow.down.right.and.arrow.up.left")
+                        Picker("Resolution", selection: $model.settings.resolution) { ForEach(Resolution.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
+                        settingLabel("Maximum frame rate", symbol: "film")
+                        Picker("Frame rate", selection: $model.settings.frameRate) { ForEach(FrameRate.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
+                        Text("Smaller sources keep their resolution and frame rate.").font(.caption2).foregroundStyle(.secondary)
+                        Text("Original frame rate is the default. Choose a lower cap only when you want to remove frames. Slo-mo videos stay protected.")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
-                    HStack { Text("Minimum actual savings").font(.caption); Spacer(); Text("\(Int(model.settings.minimumSavings * 100))%").font(.caption.monospacedDigit()) }
-                    Slider(value: $model.settings.minimumSavings, in: 0.05...0.7, step: 0.05)
-                    Text("Skip a replacement if the finished file saves less than this.").font(.caption2).foregroundStyle(.secondary)
+                    Divider()
+                    VStack(alignment: .leading, spacing: 12) {
+                        settingLabel("Picture quality", symbol: "slider.horizontal.3")
+                        Picker("Quality", selection: $model.settings.quality) { ForEach(Quality.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().disabled(model.settings.useCustomBitrate)
+                        Text(model.settings.pictureQualityExplanation).font(.caption2).foregroundStyle(.secondary)
+                        Text("HEVC encoding is lossy, including with Original resolution and frame rate.").font(.caption2).foregroundStyle(.secondary)
+                        Toggle("Set video bitrate manually", isOn: $model.settings.useCustomBitrate).font(.caption)
+                        if model.settings.useCustomBitrate {
+                            HStack { Slider(value: $model.settings.bitrateMbps, in: 0.5...30, step: 0.5); Text("\(model.settings.bitrateMbps, specifier: "%.1f") Mbps").font(.caption.monospacedDigit()).frame(width: 65) }
+                        }
+                        HStack { Text("Minimum actual savings").font(.caption); Spacer(); Text("\(Int(model.settings.minimumSavings * 100))%").font(.caption.monospacedDigit()) }
+                        Slider(value: $model.settings.minimumSavings, in: 0.05...0.7, step: 0.05)
+                        Text("Skip a replacement if the finished file saves less than this.").font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 12) {
@@ -340,6 +370,7 @@ struct ContentView: View {
                     Toggle("Replace originals in Photos", isOn: $model.replaceOriginals).toggleStyle(.switch).font(.callout).disabled(!model.connected && !model.demo)
                     Text(model.replaceOriginals && (model.connected || model.demo) ? "Validated copies are imported first. macOS then asks once to delete the successfully replaced originals. The Review tab still lets you compare or revert them." : "Keep both versions until you decide in the Review tab. Compare side by side, then accept and delete the original or revert the compressed copy.")
                         .font(.caption).foregroundStyle(.secondary).lineSpacing(3)
+                    if model.connected { SharedLibraryNotice(compact: true).environmentObject(model) }
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 12) {
@@ -381,6 +412,11 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 10) {
+            if model.mediaMode == .photos && model.photoSettings.convertLiveToStill,
+               !model.isBusy, model.selectedVideos.contains(where: { $0.kind == .livePhoto }) {
+                Label("Selected Live Photo copies will be still images: motion and sound will be removed.", systemImage: "livephoto.slash")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+            }
             if model.isReviewing { ProgressView().controlSize(.small) }
             else if model.isBusy { ProgressView(value: model.overallProgress).tint(accent) }
             if let summary = model.batchSummary, !model.isBusy {
@@ -408,7 +444,7 @@ struct ContentView: View {
             } else {
               HStack(spacing: 22) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(model.isBusy ? model.activity : "\(model.selected.count) videos selected").font(.callout.weight(.semibold)).lineLimit(1)
+                    Text(model.isBusy ? model.activity : "\(model.selected.count) \(model.mediaMode.rawValue.lowercased()) selected").font(.callout.weight(.semibold)).lineLimit(1)
                     Text(model.isBusy ? "Originals stay archived. Stopping never deletes an unfinished original." : model.unknownSelectedSizes > 0 ? "\(model.unknownSelectedSizes) original sizes pending · measured during download" : "\(DisplayFormat.bytes(model.selectedOriginalBytes)) → ~\(DisplayFormat.bytes(model.selectedEstimatedBytes)) estimated")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -523,8 +559,8 @@ private struct VideoRow: View {
                 .toggleStyle(.checkbox).labelsHidden()
                 .disabled(model.isBusy || video.unsupportedReason != nil)
             VideoSidebarRow(title: video.name,
-                            detail: "\(video.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending") · \(DisplayFormat.duration(video.facts.duration))\(video.facts.isHDR ? " · HDR" : "")",
-                            status: statusText, statusColor: statusColor,
+                            detail: "\(video.facts.bytes.map(DisplayFormat.bytes) ?? "Size pending") · " + (video.kind.isPhoto ? (video.kind == .livePhoto ? "Live Photo" : "Photo") : DisplayFormat.duration(video.facts.duration)) + (video.facts.isHDR ? " · HDR" : ""),
+                            status: statusText, savings: savingsText, statusColor: statusColor,
                             progress: model.statuses[video.id]?.fraction) {
                 VideoThumbnail(video: video)
             }
@@ -537,8 +573,18 @@ private struct VideoRow: View {
     private var statusText: String {
         if let status = model.statuses[video.id] { return status.text }
         if video.unsupportedReason != nil { return video.isSlowMotion ? "Slo-mo · protected" : "Original protected" }
-        if let savings = model.plan(video).estimatedSavings { return "Save ~\(DisplayFormat.bytes(savings))" }
-        return "~\(DisplayFormat.bytes(model.plan(video).estimatedBytes)) output"
+        if savingsText != nil { return "" }
+        return "~\(DisplayFormat.bytes(model.estimatedBytes(video))) output"
+    }
+
+    private var savingsText: String? {
+        guard video.unsupportedReason == nil else { return nil }
+        if let record = model.outputRecord(for: video.id), let before = record.originalBytes, let after = record.outputBytes, before > after {
+            return "\(DisplayFormat.bytes(before - after)) smaller · \(Int((Double(before - after) / Double(before) * 100).rounded()))%"
+        }
+        guard let savings = model.estimatedSavings(video), savings > 0 else { return nil }
+        let percent = video.facts.bytes.flatMap { $0 > 0 ? Int((Double(savings) / Double($0) * 100).rounded()) : nil }
+        return "Save ~\(DisplayFormat.bytes(savings))" + (percent.map { " · ~\($0)%" } ?? "")
     }
 
     private var statusColor: Color {
@@ -565,8 +611,8 @@ private struct VideoContextMenu: View {
         if let record = model.outputRecord(for: video.id), record.hasReviewableCopy {
             Button("Review side by side") { model.openReview(record) }
         }
-        Button("Preview video") { model.focus(video) }
-        if video.asset != nil, !video.hasInspectedFacts, video.unsupportedReason == nil {
+        Button(video.kind.isPhoto ? "Preview photo" : "Preview video") { model.focus(video) }
+        if !video.kind.isPhoto, video.asset != nil, !video.hasInspectedFacts, video.unsupportedReason == nil {
             Button("Inspect original…") { model.requestInspection(video) }
                 .disabled(model.isBusy || model.inspections[video.id]?.isWorking == true)
         }
@@ -583,11 +629,15 @@ private struct VideoThumbnail: View {
             if let image { Image(nsImage: image).resizable().scaledToFill() }
             else if video.isDemo { SampleArtwork(seed: abs(video.id.hashValue % 6)) }
             else { Rectangle().fill(Color.gray.opacity(0.15)); Image(systemName: "film").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity) }
-            Text(DisplayFormat.duration(video.facts.duration)).font(.system(size: 9, weight: .medium)).foregroundStyle(.white).padding(3).background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 3)).padding(4)
+            if !video.kind.isPhoto { Text(DisplayFormat.duration(video.facts.duration)).font(.system(size: 9, weight: .medium)).foregroundStyle(.white).padding(3).background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 3)).padding(4) }
         }
         .task(id: video.id) {
             if let asset = video.asset { image = await PhotosService.thumbnail(asset, size: CGSize(width: 200, height: 150)) }
             else if let url = video.fileURL {
+                if video.kind.isPhoto {
+                    image = await Task.detached { PhotoPreviewRenderer.render(url, maximum: 200) }.value
+                    return
+                }
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url)); generator.appliesPreferredTrackTransform = true; generator.maximumSize = CGSize(width: 200, height: 150)
                 if let result = try? await generator.image(at: CMTime(seconds: min(2, video.facts.duration / 2), preferredTimescale: 600)) { image = NSImage(cgImage: result.image, size: .zero) }
             }
@@ -623,6 +673,7 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack { VStack(alignment: .leading, spacing: 5) { Text("Compression history").font(.title2.weight(.semibold)); Text("Every original, smaller copy, and replacement is recorded here.").foregroundStyle(.secondary) }; Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
             if !model.pending.isEmpty {
+                SharedLibraryNotice().environmentObject(model)
                 HStack {
                     Label("\(model.pending.count) verified copies have originals in Photos.", systemImage: "checkmark.shield")
                     Spacer()
@@ -653,7 +704,7 @@ struct HistoryView: View {
                                 HStack {
                                     if record.hasReviewableCopy { Button("Review side by side") { model.openReview(record); dismiss() } }
                                     Button("Show archived files") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.backupPath)]) }
-                                    if FileManager.default.fileExists(atPath: record.outputPath) { Button("Play compressed copy") { NSWorkspace.shared.open(URL(fileURLWithPath: record.outputPath)) } }
+                                    if FileManager.default.fileExists(atPath: record.outputPath) { Button("Open compressed copy") { NSWorkspace.shared.open(URL(fileURLWithPath: record.outputPath)) } }
                                     if let id = record.replacementID, record.stage != .reverted { Button("Show copy in Photos") { model.showInPhotos(id: id) } }
                                     Spacer()
                                 }.controlSize(.small)

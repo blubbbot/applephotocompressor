@@ -2,6 +2,7 @@ import AppKit
 import Photos
 import AVFoundation
 import CompressionCore
+import UniformTypeIdentifiers
 
 struct LibraryVideo: Identifiable {
     let id: String
@@ -14,6 +15,8 @@ struct LibraryVideo: Identifiable {
     var isDemo = false
     var factsAreMeasured = false
     var isSlowMotion = false
+    var kind: MediaKind = .video
+    var photoFormat: String?
 
     var hasInspectedFacts: Bool { factsAreMeasured || fileURL != nil || isDemo }
 }
@@ -120,12 +123,12 @@ enum PhotosService {
         guard status == .authorized else { throw MediaError.invalid("Full Photos access is needed to browse and replace videos. Enable it in System Settings → Privacy & Security → Photos.") }
     }
 
-    static func videos() async -> [LibraryVideo] {
+    static func videos(photos: Bool = false) async -> [LibraryVideo] {
         await Task.detached(priority: .userInitiated) {
             let options = PHFetchOptions()
             options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
             options.includeHiddenAssets = false
-            let assets = PHAsset.fetchAssets(with: .video, options: options)
+            let assets = PHAsset.fetchAssets(with: photos ? .image : .video, options: options)
             var slowMotionIDs = Set<String>()
             let slowMotionAlbums = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumSlomoVideos, options: nil)
             slowMotionAlbums.enumerateObjects { album, _, _ in
@@ -136,18 +139,21 @@ enum PhotosService {
             var result: [LibraryVideo] = []
             assets.enumerateObjects { asset, _, _ in
                 let resources = PHAssetResource.assetResources(for: asset)
-                let original = resources.first(where: { $0.type == .video })
+                let original = resources.first(where: { $0.type == (photos ? .photo : .video) })
                 let slowMotion = asset.mediaSubtypes.contains(.videoHighFrameRate) || slowMotionIDs.contains(asset.localIdentifier)
                 let reason = slowMotion ? "Slo-mo protected: the captured frames and slow-motion timing are kept by excluding this video from compression." : protectionReason(for: asset, resources: resources)
                 result.append(LibraryVideo(id: asset.localIdentifier, name: original?.originalFilename ?? "Video", asset: asset, fileURL: nil,
                     facts: VideoFacts(width: asset.pixelWidth, height: asset.pixelHeight, duration: asset.duration),
-                    date: asset.creationDate ?? .distantPast, unsupportedReason: reason, isSlowMotion: slowMotion))
+                    date: asset.creationDate ?? .distantPast, unsupportedReason: reason, isSlowMotion: slowMotion,
+                    kind: photos ? (asset.mediaSubtypes.contains(.photoLive) ? .livePhoto : .photo) : .video,
+                    photoFormat: photos ? original?.uniformTypeIdentifier : nil))
             }
             return result
         }.value
     }
 
     static func protectionReason(for asset: PHAsset, resources: [PHAssetResource]? = nil) -> String? {
+        if asset.mediaType == .image { return photoProtectionReason(asset, resources: resources) }
         if asset.mediaSubtypes.contains(.videoHighFrameRate) { return "Slo-mo protected: the captured frames and slow-motion timing are retained." }
         if asset.mediaSubtypes.contains(.videoCinematic) { return "Cinematic video: depth and focus adjustments need a dedicated export path." }
         if asset.mediaSubtypes.contains(.spatialMedia) { return "Spatial video: stereo/depth information needs a dedicated export path." }
@@ -223,7 +229,7 @@ enum PhotosService {
     static func archive(_ asset: PHAsset, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
         let resources = PHAssetResource.assetResources(for: asset)
         if let reason = protectionReason(for: asset, resources: resources) { throw MediaError.invalid(reason) }
-        guard let resource = resources.first(where: { $0.type == .video }) else {
+        guard let resource = resources.first(where: { $0.type == (asset.mediaType == .image ? .photo : .video) }) else {
             throw MediaError.invalid("This video was edited or has no supported original resource. It has been kept.")
         }
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -245,14 +251,15 @@ enum PhotosService {
         return albums
     }
 
-    static func importVideo(_ url: URL, original: PHAsset, albums: [PHAssetCollection], resourceFilename: String? = nil) async throws -> String {
+    static func importVideo(_ url: URL, original: PHAsset, albums: [PHAssetCollection], resourceFilename: String? = nil, pairedVideo: URL? = nil) async throws -> String {
         guard albums.allSatisfy({ $0.canPerform(.addContent) }) else { throw MediaError.invalid("One of the original's albums is not writable. The original is retained.") }
         var identifier: String?
         try await change {
             let request = PHAssetCreationRequest.forAsset()
             let options = PHAssetResourceCreationOptions()
             options.originalFilename = resourceFilename ?? url.lastPathComponent
-            request.addResource(with: .video, fileURL: url, options: options)
+            request.addResource(with: original.mediaType == .image ? .photo : .video, fileURL: url, options: options)
+            if let pairedVideo { request.addResource(with: .pairedVideo, fileURL: pairedVideo, options: nil) }
             request.creationDate = original.creationDate; request.location = original.location
             request.isFavorite = original.isFavorite; request.isHidden = original.isHidden
             if let placeholder = request.placeholderForCreatedAsset {
@@ -264,12 +271,16 @@ enum PhotosService {
         return identifier
     }
 
-    static func verifyImport(_ identifier: String, original: PHAsset, albums: [PHAssetCollection]) throws {
-        guard let imported = fetch(identifier), abs(imported.duration - original.duration) < 0.25,
+    static func verifyImport(_ identifier: String, original: PHAsset, albums: [PHAssetCollection], expectedLive: Bool? = nil) throws {
+        guard let imported = fetch(identifier), imported.mediaType == original.mediaType,
+              original.mediaType == .image || abs(imported.duration - original.duration) < 0.25,
               imported.isFavorite == original.isFavorite, imported.isHidden == original.isHidden,
               abs((imported.creationDate ?? .distantPast).timeIntervalSince(original.creationDate ?? .distantPast)) < 1,
               Set(regularAlbums(containing: imported).map(\.localIdentifier)).isSuperset(of: Set(albums.map(\.localIdentifier))) else {
             throw MediaError.invalid("Photos import or library metadata verification failed. The original is retained. Check the imported copy before retrying.")
+        }
+        if let expectedLive, imported.mediaSubtypes.contains(.photoLive) != expectedLive {
+            throw MediaError.invalid("The imported photo's Live Photo status was not preserved as requested. The original is retained.")
         }
         if let expected = original.location {
             guard let location = imported.location, location.distance(from: expected) < 2 else { throw MediaError.invalid("The capture location did not transfer. The original is retained.") }
@@ -278,12 +289,12 @@ enum PhotosService {
 
     static func fetch(_ id: String) -> PHAsset? { PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject }
 
-    static func restoredVideo(named filename: String) async throws -> PHAsset? {
+    static func restoredVideo(named filename: String, photos: Bool = false) async throws -> PHAsset? {
         try await Task.detached(priority: .userInitiated) {
             let options = PHFetchOptions(); options.includeHiddenAssets = true
             var matches: [PHAsset] = []
-            PHAsset.fetchAssets(with: .video, options: options).enumerateObjects { asset, _, _ in
-                if PHAssetResource.assetResources(for: asset).contains(where: { $0.type == .video && $0.originalFilename == filename }) {
+            PHAsset.fetchAssets(with: photos ? .image : .video, options: options).enumerateObjects { asset, _, _ in
+                if PHAssetResource.assetResources(for: asset).contains(where: { $0.type == (photos ? .photo : .video) && $0.originalFilename == filename }) {
                     matches.append(asset)
                 }
             }

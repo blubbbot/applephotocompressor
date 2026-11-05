@@ -20,7 +20,7 @@ struct PhotoCompressorApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Connect Photos Library…") { model.connect() }.keyboardShortcut("o", modifiers: [.command, .shift]).disabled(model.isBusy)
-                Button("Open Video Files…") { model.openFiles() }.keyboardShortcut("o").disabled(model.isBusy)
+                Button(model.mediaMode == .photos ? "Open Photo Files…" : "Open Video Files…") { model.openFiles() }.keyboardShortcut("o").disabled(model.isBusy)
             }
         }
     }

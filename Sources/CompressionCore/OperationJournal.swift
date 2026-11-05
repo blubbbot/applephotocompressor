@@ -38,6 +38,12 @@ public struct OperationRecord: Codable, Identifiable {
     public var restoredOriginalID: String?
     public var restoredOriginalVerified: Bool?
     public var reviewDecision: ReviewDecision?
+    public var mediaKind: MediaKind?
+    public var photoSettings: PhotoCompressionSettings?
+    public var photoFacts: PhotoFacts?
+    public var outputPhotoFacts: PhotoFacts?
+    public var pairedVideoPath: String?
+    public var pairedVideoBytes: Int64?
     public var settings: CompressionSettings
 
     public init(sourceID: String, sourceName: String, backupPath: String, outputPath: String, settings: CompressionSettings) {
@@ -47,18 +53,35 @@ public struct OperationRecord: Codable, Identifiable {
     }
 
     public var isDeletionCandidate: Bool {
-        stage == .readyToDelete && reviewDecision == nil && metadataVerified && replacementID?.isEmpty == false &&
+        stage == .readyToDelete && reviewDecision == nil && completePhotoResources && metadataVerified && replacementID?.isEmpty == false && replacementID != sourceID &&
         !(backupPath.isEmpty) && (originalBytes ?? 0) > 0 && (outputBytes ?? 0) > 0 &&
         (outputBytes ?? .max) < (originalBytes ?? 0)
     }
 
     public var isPhotosOperation: Bool { !sourceID.hasPrefix("/") }
+    public var kind: MediaKind { mediaKind ?? .video }
+    public var outputIsLivePhoto: Bool { kind == .livePhoto && photoSettings?.convertLiveToStill != true }
+    public var originalFileBytes: Int64? { originalBytes.map { $0 - (pairedVideoBytes ?? 0) } }
+    public var outputFileBytes: Int64? { outputBytes.map { $0 - (outputIsLivePhoto ? (pairedVideoBytes ?? 0) : 0) } }
+    public var completePhotoResources: Bool {
+        guard kind.isPhoto else { return true }
+        guard photoSettings != nil, let photoFacts, let outputPhotoFacts,
+              photoFacts.bytes > 0, outputPhotoFacts.bytes > 0, photoFacts.width > 0, photoFacts.height > 0,
+              outputPhotoFacts.width > 0, outputPhotoFacts.height > 0,
+              originalFileBytes == photoFacts.bytes, outputFileBytes == outputPhotoFacts.bytes else { return false }
+        return kind != .livePhoto || (pairedVideoPath?.isEmpty == false && (pairedVideoBytes ?? 0) > 0)
+    }
+    public var archiveFiles: [(String, Int64?)] {
+        var files = [(backupPath, originalFileBytes), (outputPath, outputFileBytes)]
+        if let pairedVideoPath { files.append((pairedVideoPath, pairedVideoBytes)) }
+        return files
+    }
 
     public var hasReviewableCopy: Bool {
         guard (outputBytes ?? 0) > 0, !outputPath.isEmpty else { return false }
         if replacementID != nil { return true }
         guard !isPhotosOperation, stage == .keptOriginal || stage == .reverted, let originalBytes, let outputBytes else { return false }
-        return originalBytes > 0 && outputBytes < originalBytes && Double(originalBytes - outputBytes) / Double(originalBytes) >= settings.minimumSavings
+        return originalBytes > 0 && outputBytes < originalBytes && Double(originalBytes - outputBytes) / Double(originalBytes) >= (photoSettings?.minimumSavings ?? settings.minimumSavings)
     }
 
     public var needsReview: Bool { hasReviewableCopy && reviewDecision == nil && stage != .reverted }

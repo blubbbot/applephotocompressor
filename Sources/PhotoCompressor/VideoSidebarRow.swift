@@ -7,6 +7,7 @@ struct VideoSidebarRow<Thumbnail: View>: View {
     let title: String
     let detail: String
     let status: String
+    var savings: String? = nil
     var statusColor: Color = .secondary
     var progress: Double? = nil
     @ViewBuilder let thumbnail: () -> Thumbnail
@@ -22,8 +23,15 @@ struct VideoSidebarRow<Thumbnail: View>: View {
                     .lineLimit(1).truncationMode(.middle).help(title)
                 Text(detail).font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
-                Text(status).font(.caption2).foregroundStyle(statusColor)
-                    .lineLimit(1).truncationMode(.tail).help(status)
+                if let savings {
+                    Text(savings).font(.callout.weight(.semibold)).foregroundStyle(.green)
+                        .lineLimit(1).padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 4))
+                }
+                if !status.isEmpty {
+                    Text(status).font(.caption2).foregroundStyle(statusColor)
+                        .lineLimit(1).truncationMode(.tail).help(status)
+                }
                 if let progress { ProgressView(value: progress).controlSize(.mini) }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -34,6 +42,7 @@ struct VideoSidebarRow<Thumbnail: View>: View {
 
 struct ReviewThumbnail: View {
     let url: URL
+    var isPhoto = false
     @State private var image: NSImage?
 
     var body: some View {
@@ -44,6 +53,10 @@ struct ReviewThumbnail: View {
         }
         .task(id: url) {
             image = nil
+            if isPhoto {
+                image = await Task.detached { PhotoPreviewRenderer.render(url, maximum: 144) }.value
+                return
+            }
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 144, height: 120)

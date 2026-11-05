@@ -9,10 +9,10 @@
     <key>CFBundleIconFile</key><string>PhotoCompressorIcon.icns</string>
     <key>CFBundleIconName</key><string>PhotoCompressorIcon</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-    <key>CFBundleShortVersionString</key><string>0.1.8</string>
-    <key>CFBundleVersion</key><string>9</string>
+    <key>CFBundleShortVersionString</key><string>0.2.0</string>
+    <key>CFBundleVersion</key><string>10</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSPhotoLibraryUsageDescription</key><string>Browse and preview videos, add smaller copies, and delete only originals that you choose to replace.</string>
-    <key>NSAppleEventsUsageDescription</key><string>Show selected videos in Photos, read file sizes, and preserve titles, captions, and keywords when replacing videos.</string>
+    <key>NSPhotoLibraryUsageDescription</key><string>Browse photos, Live Photos, and videos; create smaller copies and delete only originals that you choose to replace.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Show selected photos and videos in Photos, read sizes, and preserve titles, captions, and keywords when replacing items.</string>
 </dict></plist>

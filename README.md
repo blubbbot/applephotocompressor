@@ -4,6 +4,9 @@ A native macOS app for browsing large Apple Photos videos, previewing them,
 estimating savings, and compressing/replacing a selected batch. No subscription,
 server, iCloud login, FFmpeg, or Python installation is required.
 
+Videos remain the default and main workflow. The **Videos / Photos** selector
+also supports ordinary JPEG/HEIC photos and supported Live Photos.
+
 [Preview the sample interface](docs/sample-library.png). The sample data and
 artwork are illustrative, rather than compression benchmarks.
 
@@ -125,6 +128,82 @@ previews work without connecting. Missing or changed archives block deletion.
 History also retains its batch deletion action. No manual reimport or searching
 for matching originals in Photos is needed for the normal review workflow.
 
+### Savings and navigation
+
+Lists show savings as a prominent green badge, with both bytes and percentage.
+Estimates retain their `~` marker; finished-copy badges use measured resource
+totals. New inspection results update the numbers immediately, but sorting waits
+for two seconds without a new preview selection or measurement. Continuing with
+the arrow keys postpones that reorder, so the next row remains the next row in
+the order you were browsing. An explicit sort/settings change or the list's
+update-order button applies the new ordering immediately. Ties use stable IDs.
+
+### iCloud Shared Photo Library
+
+**Regular albums, Shared Albums, and iCloud Shared Photo Library are different.**
+The public SDK used by this macOS 14+ app exposes Shared Albums through
+`PHAssetSourceType.typeCloudShared`; it does not provide a supported membership
+property or a move-to-Shared-Library operation for iCloud Shared Photo Library.
+The Photos scripting dictionary likewise provides neither operation. The app
+does not query private Photos properties or its internal database to guess.
+
+Shared Library placement is therefore **not detected, restored, or verified**.
+A replacement or restored original may be in Personal Library. Review shows a
+warning and a **Show copy in Photos** action. If the source was shared, move the
+copy using **Photos → Image → Move to Shared Library** before deleting the source.
+The same check applies to originals restored from an archive. See
+[Apple's instructions](https://support.apple.com/guide/photos/pht9a3599aac/mac).
+
+Automatic replacement asks once per app session whether to keep copies for
+review or proceed despite that limitation. Shared Album items remain protected.
+When a tracked replacement's modification date changes, its original resources
+are compared against the archive with SHA-256 and its supported metadata is
+rechecked before removal. This allows an unchanged copy moved in Photos to be
+revalidated without treating an arbitrary edit as safe. It does not certify
+shared membership or iCloud synchronization.
+
+### Photos and Live Photos
+
+Photo compression makes sense particularly for large JPEGs and for deliberate
+downscaling. Already-efficient HEIC images may offer little saving at an
+acceptable visual quality. Encoding remains lossy; the quality percentage is an
+encoder control, not a measurement of fidelity.
+
+Choose **Photos** in the header, connect the same library, and select ordinary
+JPEG/HEIC photos. Set photo quality, maximum long edge, and minimum **measured**
+savings. Photo settings, filters, and replacement preference are separate from
+video settings. Photos initially uses review-first replacement; the app always
+starts in Videos. Local JPEG/HEIC files can also be opened; local Live Photo
+pairs must be handled through the Photos library, rather than guessed from
+neighboring files.
+
+- Ordinary SDR photos are encoded as HEIC using native Image I/O. Dimensions,
+  orientation, and decodability are checked. Supported library date, location,
+  favorites, regular albums, title, caption, and keywords use the same verified
+  transfer workflow as videos.
+- **Keep Live Photo is the default.** Both original image and original motion
+  resources are archived. Only the still image is re-encoded; the motion file,
+  sound, and timing are retained byte for byte. Public `PHLivePhoto` validation
+  must accept both the original and compressed pairs before import, and the
+  imported asset must still report Live Photo status.
+- **Convert Live Photos to stills** is an explicit optional setting. Its loss of
+  motion and sound is labeled in settings, the selection footer, and Review.
+  The full original pair is still archived so Revert can restore a Live Photo.
+- Image **and** motion bytes count toward minimum savings. A result below the
+  threshold is not imported. Initial photo estimates are rough; Live motion
+  size is measured only after the original resources are archived.
+- Review compares both image versions and offers Live Photo playback when
+  applicable. It supports accept/delete and archive-backed revert for photos
+  as well as videos. New restored assets do not retain their old Photos IDs,
+  People tags, editable history, or automatically restored shared placement.
+- RAW/RAW+JPEG, PNG/other formats, animated or spatial photos, bursts, edited
+  photos, HDR/gain-map, high-bit-depth, transparency, and depth/Portrait
+  resources are protected. This release does not silently flatten those extras.
+
+Native API references: [creating assets from resources](https://developer.apple.com/documentation/photos/phassetcreationrequest),
+[Live Photo resource validation](https://developer.apple.com/documentation/photos/phlivephoto/request(withresourcefileurls:placeholderimage:targetsize:contentmode:resulthandler:)),
+[image auxiliary data](https://developer.apple.com/documentation/imageio/cgimagesourcecopyauxiliarydatainfoatindex(_:_:_:)).
+
 Right-click a video and choose **Show in Photos** to reveal that specific item
 in the Photos app. The preview also has a Show in Photos button; when viewing a
 compressed copy, it reveals that copy. History offers **Show copy in Photos**
@@ -216,6 +295,13 @@ audio selection, missing files, and cancellation/reload. They passed on Intel.
 The corrected 0.1.7 UI, archive restoration, and Dock folder-stack icon have not
 had a live verification; the computer-use bridge failed and further UI testing
 was skipped at the user's request.
+Version 0.2.0 passed 29 automated tests, including JPEG/HEIC encoding,
+orientation/EXIF/GPS preservation, resizing, archive manifests, deferred ordering,
+and a synthetic Live Photo that remained valid after re-encoding its still image
+while its movie bytes remained unchanged. New photo-library import/deletion,
+reversion, real iPhone Live Photos/HDR, manual Shared Library moves, and the new
+UI have not had a live library test. The resource validator fails closed when a
+pair cannot be reconstructed; earlier video UI tests do not verify these paths.
 Start with a backed-up test clip and replacement disabled before using replacement.
 
 - Ordinary, unedited single-track video is supported. Edited videos, slow-motion,
