@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ImportedCopy {
+public struct ImportedCopy: Sendable {
     public let id: String
     public let modifiedAt: Date?
 

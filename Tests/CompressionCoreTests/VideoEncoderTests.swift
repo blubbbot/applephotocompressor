@@ -75,7 +75,19 @@ final class VideoEncoderTests: XCTestCase {
         XCTAssertEqual(output.audioTracks, 0)
     }
 
-    private func makeVideo(_ url: URL, width: Int, height: Int, fps: Int, seconds: Double, portrait: Bool = false, withAudio: Bool = false, compressedAudio: Bool = false, hdr: Bool = false) async throws {
+    func testTimedMetadataTracksAreCountedAndNotCopied() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("metadata.mov")
+        try await makeVideo(source, width: 320, height: 180, fps: 15, seconds: 0.5, timedMetadata: true)
+        let before = try await VideoEncoder.inspect(source)
+        XCTAssertEqual(before.facts.timedMetadataTracks, 1)
+        let output = try await VideoEncoder.encode(source: source, destination: directory.appendingPathComponent("output.mov"), settings: CompressionSettings(), cancellation: CancellationFlag(), progress: { _ in })
+        XCTAssertEqual(output.facts.timedMetadataTracks, 0)
+    }
+
+    private func makeVideo(_ url: URL, width: Int, height: Int, fps: Int, seconds: Double, portrait: Bool = false, withAudio: Bool = false, compressedAudio: Bool = false, hdr: Bool = false, timedMetadata: Bool = false) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         var videoSettings: [String: Any] = [AVVideoCodecKey: hdr ? AVVideoCodecType.hevc : AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height, AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 10_000_000], AVVideoEncoderSpecificationKey: [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: false]]
         if hdr {
@@ -97,8 +109,24 @@ final class VideoEncoderTests: XCTestCase {
             let audio = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings, sourceFormatHint: audioFormat)
             writer.add(audio); audioInput = audio
         }
+        let metadataIdentifier = "mdta/com.example.photocompressor.fixture"
+        var metadataAdaptor: AVAssetWriterInputMetadataAdaptor?
+        if timedMetadata {
+            let specification = [kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String: metadataIdentifier,
+                                 kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String: kCMMetadataBaseDataType_UTF8 as String]
+            var format: CMFormatDescription?
+            guard CMMetadataFormatDescriptionCreateWithMetadataSpecifications(allocator: kCFAllocatorDefault, metadataType: kCMMetadataFormatType_Boxed, metadataSpecifications: [specification] as CFArray, formatDescriptionOut: &format) == noErr else { throw MediaError.invalid("Cannot create test metadata format.") }
+            let metadata = AVAssetWriterInput(mediaType: .metadata, outputSettings: nil, sourceFormatHint: format)
+            writer.add(metadata); metadataAdaptor = AVAssetWriterInputMetadataAdaptor(assetWriterInput: metadata)
+        }
         guard writer.startWriting() else { throw writer.error! }
         writer.startSession(atSourceTime: .zero)
+        if let metadataAdaptor {
+            let item = AVMutableMetadataItem()
+            item.identifier = AVMetadataIdentifier(rawValue: metadataIdentifier); item.dataType = kCMMetadataBaseDataType_UTF8 as String; item.value = "fixture" as NSString
+            guard metadataAdaptor.append(AVTimedMetadataGroup(items: [item], timeRange: CMTimeRange(start: .zero, duration: CMTime(seconds: seconds, preferredTimescale: 600)))) else { throw writer.error ?? MediaError.invalid("Cannot append test metadata.") }
+            metadataAdaptor.assetWriterInput.markAsFinished()
+        }
         for frame in 0..<Int(Double(fps) * seconds) {
             let deadline = Date().addingTimeInterval(20)
             while !input.isReadyForMoreMediaData {

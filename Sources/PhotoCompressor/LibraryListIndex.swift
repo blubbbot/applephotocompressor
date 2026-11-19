@@ -4,7 +4,7 @@ import CompressionCore
 /// Value snapshots only: no PhotoKit, file-system, or view work in this builder.
 /// The model runs it off the main actor and publishes one cached list.
 enum LibraryListIndex {
-    struct Query {
+    struct Query: Sendable {
         var search = ""
         var minimumSize: Int64 = 0
         var hideUnsupported = true
@@ -21,7 +21,7 @@ enum LibraryListIndex {
         var now = Date()
     }
 
-    struct Result {
+    struct Result: Sendable {
         let items: [LibraryVideo]
         let order: StableListOrder<String>
     }

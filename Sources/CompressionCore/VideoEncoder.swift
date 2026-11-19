@@ -58,7 +58,8 @@ public enum VideoEncoder {
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
         var audioBitrate = 0
         for audio in audioTracks { audioBitrate += Int(try await audio.load(.estimatedDataRate)) }
-        return MediaInspection(facts: VideoFacts(width: Int(abs(oriented.width).rounded()), height: Int(abs(oriented.height).rounded()), duration: duration, frameRate: Double(fps), bytes: bytes, isHDR: hdr), audioTracks: audioTracks.count, colorPrimaries: primaries, transferFunction: transfer, colorMatrix: matrix, hasDolbyVision: dolby, audioBitrate: audioBitrate)
+        let metadataTracks = try await asset.loadTracks(withMediaType: .metadata).count
+        return MediaInspection(facts: VideoFacts(width: Int(abs(oriented.width).rounded()), height: Int(abs(oriented.height).rounded()), duration: duration, frameRate: Double(fps), bytes: bytes, isHDR: hdr, timedMetadataTracks: metadataTracks), audioTracks: audioTracks.count, colorPrimaries: primaries, transferFunction: transfer, colorMatrix: matrix, hasDolbyVision: dolby, audioBitrate: audioBitrate)
     }
 
     public static func encode(source: URL, destination: URL, settings: CompressionSettings, cancellation: CancellationFlag, progress: @escaping @Sendable (Double) -> Void) async throws -> MediaInspection {

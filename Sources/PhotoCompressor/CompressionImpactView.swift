@@ -62,6 +62,12 @@ struct CompressionImpactView: View {
             impactRow("Sound and duration", symbol: "waveform", value: "Retained",
                 explanation: "Audio is copied without re-encoding. The clip keeps its duration and playback speed, including when the frame rate is reduced.", changes: false)
 
+            if video.facts.timedMetadataTracks != 0 {
+                impactRow("Timed metadata", symbol: "info.circle", value: timedMetadataSummary,
+                    explanation: "File-level metadata is copied, but separate timed metadata tracks, such as camera motion or changing location, are not transferred. The original archive retains them.",
+                    changes: video.facts.timedMetadataTracks != nil)
+            }
+
             Divider()
             Text("The estimate uses target bitrate and duration. Actual savings depend on the video; they cannot be split reliably into a percentage for each setting or used as a visual quality score. Compare the original and compressed previews before deleting an original.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -69,6 +75,11 @@ struct CompressionImpactView: View {
         .padding(18)
         .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.08)))
+    }
+
+    private var timedMetadataSummary: String {
+        guard let count = video.facts.timedMetadataTracks else { return "Not copied, if present" }
+        return "\(count) \(count == 1 ? "track" : "tracks") not copied"
     }
 
     private func impactRow(_ title: String, symbol: String, value: String, explanation: String, changes: Bool) -> some View {

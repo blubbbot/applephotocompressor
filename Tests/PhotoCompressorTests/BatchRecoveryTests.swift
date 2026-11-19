@@ -156,20 +156,17 @@ final class BatchRecoveryTests: XCTestCase {
     }
 
     private struct Fixture {
+        let environment: TestModelEnvironment
         let directory: URL
         let source: URL
         let journal: OperationJournal
-        let preferences: UserDefaults
-        let suite: String
 
         init() throws {
-            directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhotoCompressor-recovery-test-" + UUID().uuidString)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            environment = try TestModelEnvironment("recovery-test")
+            directory = environment.directory
             source = directory.appendingPathComponent("source.jpg")
-            suite = "PhotoCompressorTests." + UUID().uuidString
-            preferences = UserDefaults(suiteName: suite)!
-            preferences.set(directory.appendingPathComponent("archive").path, forKey: "backupDirectory")
-            journal = try OperationJournal(url: directory.appendingPathComponent("operations.json"))
+            environment.preferences.set(directory.appendingPathComponent("archive").path, forKey: "backupDirectory")
+            journal = try OperationJournal(url: environment.journalURL)
             let context = try XCTUnwrap(CGContext(data: nil, width: 320, height: 240, bitsPerComponent: 8, bytesPerRow: 320 * 4,
                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
             context.setFillColor(CGColor(red: 0.2, green: 0.6, blue: 0.3, alpha: 1))
@@ -183,9 +180,7 @@ final class BatchRecoveryTests: XCTestCase {
             try handle.seekToEnd(); try handle.write(contentsOf: Data(repeating: 0, count: 200_000)); try handle.close()
         }
 
-        @MainActor func model() -> AppModel {
-            AppModel(preferences: preferences, journalURL: directory.appendingPathComponent("operations.json"))
-        }
+        @MainActor func model() -> AppModel { environment.model() }
 
         func archivedRecord() throws -> OperationRecord {
             var record = OperationRecord(sourceID: source.path, sourceName: "source.jpg", backupPath: "", outputPath: "", settings: .init())
@@ -213,9 +208,6 @@ final class BatchRecoveryTests: XCTestCase {
             return record
         }
 
-        func remove() {
-            preferences.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(at: directory)
-        }
+        func remove() { environment.remove() }
     }
 }

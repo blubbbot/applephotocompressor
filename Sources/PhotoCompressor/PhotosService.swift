@@ -4,7 +4,7 @@ import AVFoundation
 import CompressionCore
 import UniformTypeIdentifiers
 
-struct LibraryVideo: Identifiable {
+struct LibraryVideo: Identifiable, Sendable {
     let id: String
     var name: String
     let asset: PHAsset?
@@ -317,17 +317,24 @@ enum PhotosService {
     static func fetch(_ id: String) -> PHAsset? { PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject }
 
     static func asset(named filename: String, photos: Bool = false) async throws -> PHAsset? {
-        try await Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
             let options = PHFetchOptions(); options.includeHiddenAssets = true
             var matches: [PHAsset] = []
-            PHAsset.fetchAssets(with: photos ? .image : .video, options: options).enumerateObjects { asset, _, _ in
-                if PHAssetResource.assetResources(for: asset).contains(where: { $0.type == (photos ? .photo : .video) && $0.originalFilename == filename }) {
-                    matches.append(asset)
+            PHAsset.fetchAssets(with: photos ? .image : .video, options: options).enumerateObjects { asset, _, stop in
+                if Task.isCancelled { stop.pointee = true; return }
+                autoreleasepool {
+                    if PHAssetResource.assetResources(for: asset).contains(where: { $0.type == (photos ? .photo : .video) && $0.originalFilename == filename }) {
+                        matches.append(asset)
+                        if matches.count > 1 { stop.pointee = true }
+                    }
                 }
             }
+            try Task.checkCancellation()
             guard matches.count <= 1 else { throw MediaError.invalid("Multiple Photos items match this operation's resource filename. Inspect them in Photos before continuing; no item was deleted or imported.") }
             return matches.first
-        }.value
+        }
+        return try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
     }
 
     static func delete(_ assets: [PHAsset]) async throws {

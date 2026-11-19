@@ -1,6 +1,6 @@
 import Foundation
 
-public enum LibrarySharingFilter: String, CaseIterable, Identifiable {
+public enum LibrarySharingFilter: String, CaseIterable, Identifiable, Sendable {
     case all, shared, personal, unknown
     public var id: Self { self }
     public var title: String {
@@ -21,7 +21,7 @@ public enum LibrarySharingFilter: String, CaseIterable, Identifiable {
     }
 }
 
-public enum ReviewSharingFilter: String, CaseIterable, Identifiable {
+public enum ReviewSharingFilter: String, CaseIterable, Identifiable, Sendable {
     case all, shared, personal, unknown, needsSharing
     public var id: Self { self }
     public var title: String {

@@ -36,6 +36,16 @@ public enum PhotoEncoder {
         return (max(1, Int((Double(width) * scale).rounded())), max(1, Int((Double(height) * scale).rounded())))
     }
 
+    // The encoder writes only the primary image, so any of these would be dropped.
+    static var protectedAuxiliaryTypes: [CFString] {
+        var types = [kCGImageAuxiliaryDataTypeHDRGainMap, kCGImageAuxiliaryDataTypeDepth, kCGImageAuxiliaryDataTypeDisparity,
+                     kCGImageAuxiliaryDataTypePortraitEffectsMatte, kCGImageAuxiliaryDataTypeSemanticSegmentationSkinMatte,
+                     kCGImageAuxiliaryDataTypeSemanticSegmentationHairMatte, kCGImageAuxiliaryDataTypeSemanticSegmentationTeethMatte,
+                     kCGImageAuxiliaryDataTypeSemanticSegmentationGlassesMatte, kCGImageAuxiliaryDataTypeSemanticSegmentationSkyMatte]
+        if #available(macOS 15, *) { types.append(kCGImageAuxiliaryDataTypeISOGainMap) }
+        return types
+    }
+
     public static func inspect(_ url: URL) throws -> PhotoFacts {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let type = CGImageSourceGetType(source) as String?, [UTType.jpeg.identifier, UTType.heic.identifier].contains(type),
@@ -49,11 +59,7 @@ public enum PhotoEncoder {
               (properties[kCGImagePropertyHasAlpha] as? Bool) != true else {
             throw MediaError.invalid("High-bit-depth or transparent photos need a dedicated encoder. The original is retained.")
         }
-        let auxiliaryTypes = [kCGImageAuxiliaryDataTypeHDRGainMap, kCGImageAuxiliaryDataTypeDepth, kCGImageAuxiliaryDataTypeDisparity,
-                              kCGImageAuxiliaryDataTypePortraitEffectsMatte, kCGImageAuxiliaryDataTypeSemanticSegmentationSkinMatte,
-                              kCGImageAuxiliaryDataTypeSemanticSegmentationHairMatte, kCGImageAuxiliaryDataTypeSemanticSegmentationTeethMatte,
-                              kCGImageAuxiliaryDataTypeSemanticSegmentationGlassesMatte, kCGImageAuxiliaryDataTypeSemanticSegmentationSkyMatte]
-        guard !auxiliaryTypes.contains(where: { CGImageSourceCopyAuxiliaryDataInfoAtIndex(source, 0, $0) != nil }) else {
+        guard !protectedAuxiliaryTypes.contains(where: { CGImageSourceCopyAuxiliaryDataInfoAtIndex(source, 0, $0) != nil }) else {
             throw MediaError.invalid("This photo contains HDR, depth, or portrait auxiliary data. It is protected rather than dropping those resources.")
         }
         let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1

@@ -1,14 +1,14 @@
 import Foundation
 
-public enum OperationStage: String, Codable {
+public enum OperationStage: String, Codable, Sendable {
     case preparing, archived, encoded, imported, readyToDelete, originalDeleted, keptOriginal, failed, reverting, reverted
 }
 
-public enum ReviewDecision: String, Codable {
+public enum ReviewDecision: String, Codable, Sendable {
     case accepted, reverted
 }
 
-public struct LibraryTextMetadata: Codable, Equatable {
+public struct LibraryTextMetadata: Codable, Equatable, Sendable {
     public let title: String
     public let caption: String
     public let keywords: [String]
@@ -18,7 +18,7 @@ public struct LibraryTextMetadata: Codable, Equatable {
     }
 }
 
-public struct OperationRecord: Codable, Identifiable {
+public struct OperationRecord: Codable, Identifiable, Sendable {
     public var id: UUID
     public var startedAt: Date
     public var sourceID: String

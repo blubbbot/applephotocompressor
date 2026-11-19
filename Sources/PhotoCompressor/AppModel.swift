@@ -4,7 +4,7 @@ import AVKit
 import CompressionCore
 import Combine
 
-enum VideoSort: String, CaseIterable, Identifiable {
+enum VideoSort: String, CaseIterable, Identifiable, Sendable {
     case largest = "Largest first", savings = "Most savings", newest = "Newest first", longest = "Longest first"
     var id: String { rawValue }
 }
@@ -85,6 +85,7 @@ final class AppModel: ObservableObject {
         didSet {
             processedSources = Set(history.filter { $0.stage != .reverted && ($0.replacementID != nil || $0.stage == .originalDeleted) }.map(\.sourceID))
             processedOutputs = Set(history.filter { $0.stage != .reverted }.compactMap(\.replacementID))
+            outputsBySource = Dictionary(grouping: history.filter { $0.outputBytes != nil && $0.stage != .failed && $0.stage != .reverted }, by: \.sourceID)
             requestLibraryUpdate()
         }
     }
@@ -119,6 +120,7 @@ final class AppModel: ObservableObject {
     private var applyNextSort = false
     private var processedSources = Set<String>()
     private var processedOutputs = Set<String>()
+    private var outputsBySource: [String: [OperationRecord]] = [:]
     private var libraryLoadTask: Task<Void, Never>?
     private var libraryLoadID = UUID()
     private var previewPosition = CMTime.zero
@@ -244,10 +246,7 @@ final class AppModel: ObservableObject {
         else { videos = []; demo = false }
     }
     func outputRecord(for id: String) -> OperationRecord? {
-        history.first {
-            $0.sourceID == id && $0.outputBytes != nil && $0.stage != .failed && $0.stage != .reverted &&
-            FileManager.default.fileExists(atPath: $0.outputPath)
-        }
+        outputsBySource[id]?.first { FileManager.default.fileExists(atPath: $0.outputPath) }
     }
     func output(for id: String) -> URL? {
         guard let record = outputRecord(for: id) else { return nil }
@@ -514,99 +513,6 @@ final class AppModel: ObservableObject {
     }
 
     func stop() { cancellation.cancel(); activity = "Stopping safely · the current iCloud download may finish first…" }
-
-    func deletePending(_ ids: Set<UUID>) {
-        guard !isBusy, connected, !pending.isEmpty else { return }
-        let records = pending.filter { ids.contains($0.id) }
-        guard !records.isEmpty else { return }
-        isBusy = true
-        Task { await deleteReady(records, markReviewed: true); isBusy = false; await reloadHistory() }
-    }
-
-    func deleteOriginal(for id: String) {
-        let ids = Set(pending.filter { $0.sourceID == id }.map(\.id))
-        deletePending(ids)
-    }
-
-    func deleteReady(_ records: [OperationRecord], markReviewed: Bool = false) async {
-        guard let journal else { return }
-        var candidates: [(OperationRecord, PHAsset)] = []
-        for record in records {
-            if !markReviewed && cancellation.isCancelled { return }
-            do {
-                var verified = record
-                if !markReviewed {
-                    if let original = PhotosService.fetch(record.sourceID), let identity = SharedLibraryController.identity(original),
-                       let observation = await sharing.inspect([identity])[record.sourceID] {
-                        if observation.state == .shared || record.sourceSharedLibrary?.state != .shared {
-                            verified.sourceSharedLibrary = observation
-                            try await journal.save(verified)
-                        }
-                    }
-                }
-                if let id = record.replacementID, let replacement = PhotosService.fetch(id),
-                   let expected = record.replacementModifiedAt, replacement.modificationDate != expected {
-                    activity = "Rechecking replacement resources and metadata…"
-                    verified.replacementModifiedAt = try await PhotosService.revalidateChangedReplacement(record, original: PhotosService.fetch(record.sourceID))
-                    try await journal.save(verified)
-                }
-                guard record.isDeletionCandidate,
-                      let original = PhotosService.fetch(record.sourceID),
-                      let replacementID = record.replacementID, let replacement = PhotosService.fetch(replacementID),
-                      original.modificationDate == record.sourceModifiedAt,
-                      verified.replacementModifiedAt == nil || replacement.modificationDate == verified.replacementModifiedAt,
-                      record.kind.isPhoto || abs(original.duration - replacement.duration) < 0.25 else {
-                    throw MediaError.invalid("An original or replacement changed or disappeared. Original retained.")
-                }
-                activity = "Verifying archive SHA-256 checksums…"
-                let flag = markReviewed ? CancellationFlag() : cancellation
-                try await Task.detached(priority: .utility) { try ArchiveIntegrity.verify(record, cancellation: flag) }.value
-                candidates.append((verified, original))
-            } catch {
-                statuses[record.sourceID] = RowStatus(text: error.localizedDescription, failed: true)
-                var failed = record; failed.error = error.localizedDescription
-                try? await journal.save(failed)
-                notice = AppNotice(text: error.localizedDescription)
-            }
-        }
-        // Hashing large archives and replacement checks can take time. Refresh
-        // every candidate's Photos snapshot again immediately before deletion.
-        candidates = candidates.filter { record, asset in
-            let original = PhotosService.fetch(asset.localIdentifier)
-            let replacement = record.replacementID.flatMap { PhotosService.fetch($0) }
-            let unchanged = original != nil && replacement != nil && original?.modificationDate == record.sourceModifiedAt &&
-                (record.replacementModifiedAt == nil || replacement?.modificationDate == record.replacementModifiedAt)
-            if !unchanged { notice = AppNotice(text: "A Photos item changed during archive verification. Its original is retained; review and retry.") }
-            return unchanged
-        }
-        guard !candidates.isEmpty else { return }
-        // Revalidation may await a resource download. A stop requested during
-        // that await must still prevent automatic deletion of prepared originals.
-        guard markReviewed || !cancellation.isCancelled else { return }
-        activity = "Confirm original deletion in the macOS Photos dialog…"
-        do {
-            try await PhotosService.delete(candidates.map(\.1))
-        } catch {
-            for (var record, _) in candidates {
-                record.error = "Deletion cancelled or failed: \(error.localizedDescription)"
-                try? await journal.save(record)
-                statuses[record.sourceID] = RowStatus(text: "Smaller copy imported · original retained")
-            }
-            notice = AppNotice(text: "Smaller copies are imported and your originals are retained. You can retry original deletion from Review. \(error.localizedDescription)")
-            return
-        }
-        // A journal write failure after Photos succeeds must never be described
-        // as a cancelled deletion or overwrite other completed records.
-        for (var record, _) in candidates {
-            record.stage = .originalDeleted; record.error = nil
-            if markReviewed { record.reviewDecision = .accepted }
-            do { try await journal.save(record) }
-            catch { notice = AppNotice(text: "Photos deleted the original and retained the compressed copy, but the history update could not be saved. Both local archives remain. Reconnect Photos and review this item before continuing. \(error.localizedDescription)") }
-            statuses[record.sourceID] = RowStatus(text: record.sourceWasShared ? "Replaced · re-share copy from Review" : "Replaced · original archived locally")
-            videos.removeAll { $0.id == record.sourceID }; selected.remove(record.sourceID)
-            if focusedID == record.sourceID { player?.pause(); player = nil; focusedID = nil }
-        }
-    }
 
     func reloadHistory() async { if let journal { history = await journal.all() } }
 

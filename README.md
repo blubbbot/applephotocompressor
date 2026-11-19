@@ -39,6 +39,13 @@ versioned ZIP in `dist`. The local build uses ad-hoc signing; Developer ID
 signing and notarization are not part of this script. It produces a universal
 application for Apple Silicon and Intel.
 
+Ad-hoc signatures do not provide a stable signing identity across builds, so
+Photos or Automation access may need to be granted again after an update.
+Distributable releases should use a consistent Developer ID signing identity
+and notarization; see [Apple's code identity guidance](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+Keep the existing `dev.local.PhotoCompressor` bundle identifier for compatibility
+with installed copies; changing it would create a different app identity.
+
 Explore the UI without granting Photos access:
 
 ```sh
@@ -447,6 +454,9 @@ Start with a backed-up test clip and replacement disabled before using replaceme
 - HDR HLG/PQ is encoded as 10-bit HEVC and checked for an HDR transfer function.
   Dolby Vision dynamic metadata may be regenerated; exact Dolby Vision fidelity
   has not been verified with real iPhone HDR footage.
+- Asset-level metadata is copied, but separate timed metadata tracks (for
+  example, camera motion or changing location) are omitted from compressed
+  videos. The archived original retains those tracks.
 - Original frame rate uses the source's nominal rate. Exact timing preservation
   for variable-frame-rate footage has not been verified. Photos-recognized
   Slo-mo is excluded rather than relying on nominal FPS to preserve its timing.

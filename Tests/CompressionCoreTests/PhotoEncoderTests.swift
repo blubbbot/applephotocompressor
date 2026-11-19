@@ -61,6 +61,34 @@ final class PhotoEncoderTests: XCTestCase {
         XCTAssertThrowsError(try PhotoEncoder.inspect(png))
     }
 
+    func testISOGainMapIsProtectedBeforeEncoding() throws {
+        guard #available(macOS 15, *) else { throw XCTSkip("ISO gain maps require macOS 15") }
+        // ImageIO also writes Apple's legacy gain map into this fixture, so the
+        // end-to-end check below alone would pass without the ISO entry.
+        XCTAssertTrue(PhotoEncoder.protectedAuxiliaryTypes.contains { $0 == kCGImageAuxiliaryDataTypeISOGainMap })
+        let directory = try directory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("hdr.jpg"), output = directory.appendingPathComponent("copy.heic")
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.extendedLinearSRGB))
+        let context = try XCTUnwrap(CGContext(data: nil, width: 128, height: 128, bitsPerComponent: 32, bytesPerRow: 128 * 16, space: space,
+            bitmapInfo: CGBitmapInfo.floatComponents.rawValue | CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(try XCTUnwrap(CGColor(colorSpace: space, components: [3, 2, 1, 1])))
+        context.fill(CGRect(x: 0, y: 0, width: 128, height: 128))
+        let writer = try XCTUnwrap(CGImageDestinationCreateWithURL(source as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(writer, try XCTUnwrap(context.makeImage()), [kCGImageDestinationEncodeRequest: kCGImageDestinationEncodeToISOGainmap] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(writer))
+        let reader = try XCTUnwrap(CGImageSourceCreateWithURL(source as CFURL, nil))
+        XCTAssertNotNil(CGImageSourceCopyAuxiliaryDataInfoAtIndex(reader, 0, kCGImageAuxiliaryDataTypeISOGainMap))
+        let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(reader, 0, nil) as? [CFString: Any])
+        XCTAssertEqual(properties[kCGImagePropertyDepth] as? Int, 8, "Protection must check auxiliary data even with an ordinary 8-bit base image")
+        let original = try Data(contentsOf: source)
+        XCTAssertThrowsError(try PhotoEncoder.inspect(source)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("auxiliary data"))
+        }
+        XCTAssertThrowsError(try PhotoEncoder.encode(source: source, destination: output, settings: .init(), cancellation: CancellationFlag()))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+        XCTAssertEqual(try Data(contentsOf: source), original)
+    }
+
     func testLivePhotoManifestCountsMotionAndRequiresEveryOriginalResource() {
         var record = OperationRecord(sourceID: "live", sourceName: "live.jpg", backupPath: "/backup/live.jpg", outputPath: "/backup/small.heic", settings: CompressionSettings())
         record.mediaKind = .livePhoto; record.photoSettings = PhotoCompressionSettings()

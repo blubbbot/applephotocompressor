@@ -18,3 +18,5 @@ public struct StableListOrder<ID: Hashable> {
     public mutating func apply(_ proposed: [ID]) { ids = proposed; pending = nil }
     public mutating func commit() { if let pending { apply(pending) } }
 }
+
+extension StableListOrder: Sendable where ID: Sendable {}

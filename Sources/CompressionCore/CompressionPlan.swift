@@ -41,9 +41,11 @@ public struct VideoFacts: Codable, Equatable, Sendable {
     public var frameRate: Double
     public var bytes: Int64?
     public var isHDR: Bool
-    public init(width: Int, height: Int, duration: Double, frameRate: Double = 30, bytes: Int64? = nil, isHDR: Bool = false) {
+    // Nil until the original is inspected. These tracks are not copied.
+    public var timedMetadataTracks: Int?
+    public init(width: Int, height: Int, duration: Double, frameRate: Double = 30, bytes: Int64? = nil, isHDR: Bool = false, timedMetadataTracks: Int? = nil) {
         self.width = width; self.height = height; self.duration = duration
-        self.frameRate = frameRate; self.bytes = bytes; self.isHDR = isHDR
+        self.frameRate = frameRate; self.bytes = bytes; self.isHDR = isHDR; self.timedMetadataTracks = timedMetadataTracks
     }
 }
 
