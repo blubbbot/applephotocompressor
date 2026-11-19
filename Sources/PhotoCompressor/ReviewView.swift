@@ -237,6 +237,10 @@ struct ReviewView: View {
                     Button("Retry archived previews") { previewRevision += 1 }
                 }
                 if let error = record.error { Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                if !record.hasArchiveChecksums {
+                    Label("Archive checksums unavailable. Automatic deletion and restoration are blocked for this older or incomplete operation.", systemImage: "exclamationmark.shield")
+                        .font(.callout).foregroundStyle(.orange)
+                }
                 if !model.reviewPreviewExpanded { reviewDetails(record) }
             }.padding(padding).frame(maxWidth: .infinity, alignment: .topLeading)
             }.frame(width: viewport.size.width, height: viewport.size.height)

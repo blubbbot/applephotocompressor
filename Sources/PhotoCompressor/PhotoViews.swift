@@ -163,7 +163,7 @@ struct PhotoDetailView: View {
                     if photo.kind == .livePhoto {
                         Label(model.photoSettings.convertLiveToStill ? "Convert to still: motion and sound will be removed from the copy." : "Keep Live Photo: original motion and sound are retained; only the still image is compressed.", systemImage: "livephoto")
                             .foregroundStyle(model.photoSettings.convertLiveToStill ? Color.orange : .secondary)
-                        Text("The motion file's size is measured when the original pair is archived. The initial size-saving estimate is provisional.")
+                        Text(photo.pairedVideoBytes == nil ? "The estimate provisionally splits the original size equally between still and motion. Archiving measures both; quality and resolution affect only the still image." : "The estimate uses the measured still and motion sizes. Retained motion is copied unchanged; quality and resolution affect only the still image.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if let output = model.outputRecord(for: photo.id), output.hasReviewableCopy {

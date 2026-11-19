@@ -18,6 +18,7 @@ struct LibraryVideo: Identifiable {
     var kind: MediaKind = .video
     var photoFormat: String?
     var isPanorama = false
+    var pairedVideoBytes: Int64?
 
     var sharingIdentity: SharedLibraryAssetIdentity? {
         guard asset != nil else { return nil }
@@ -164,8 +165,10 @@ enum PhotosService {
                         photoFormat: photos ? original?.uniformTypeIdentifier : nil, isPanorama: asset.mediaSubtypes.contains(.photoPanorama))
                     if let old = previousByID[item.id], old.asset?.modificationDate == asset.modificationDate, old.hasInspectedFacts {
                         item.facts = old.facts; item.factsAreMeasured = true
+                        item.pairedVideoBytes = old.pairedVideoBytes
                     } else if let record = historyByID[item.id], record.sourceModifiedAt == asset.modificationDate, let facts = record.sourceFacts {
                         item.facts = facts; item.factsAreMeasured = true
+                        item.pairedVideoBytes = record.pairedVideoBytes
                     }
                     result.append(item)
                 }
@@ -313,7 +316,7 @@ enum PhotosService {
 
     static func fetch(_ id: String) -> PHAsset? { PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject }
 
-    static func restoredVideo(named filename: String, photos: Bool = false) async throws -> PHAsset? {
+    static func asset(named filename: String, photos: Bool = false) async throws -> PHAsset? {
         try await Task.detached(priority: .userInitiated) {
             let options = PHFetchOptions(); options.includeHiddenAssets = true
             var matches: [PHAsset] = []
@@ -322,7 +325,7 @@ enum PhotosService {
                     matches.append(asset)
                 }
             }
-            guard matches.count <= 1 else { throw MediaError.invalid("Multiple restored originals were found. Check them in Photos before continuing; no video was deleted.") }
+            guard matches.count <= 1 else { throw MediaError.invalid("Multiple Photos items match this operation's resource filename. Inspect them in Photos before continuing; no item was deleted or imported.") }
             return matches.first
         }.value
     }

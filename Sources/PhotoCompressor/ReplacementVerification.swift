@@ -24,6 +24,16 @@ extension PhotosService {
         if let expectedText {
             guard try await PhotosScript.readMetadata(id: id) == expectedText else { throw MediaError.invalid("The replacement's title, caption, or keywords changed. Review those changes in Photos; no item was deleted.") }
         }
+        try await verifyReplacementResources(record, replacement: replacement)
+        guard fetch(id)?.modificationDate == modification else { throw MediaError.invalid("The replacement changed while it was checked. Retry after finishing changes in Photos.") }
+        return modification
+    }
+
+    static func verifyReplacementResources(_ record: OperationRecord, replacement: PHAsset) async throws {
+        guard !PHAssetResource.assetResources(for: replacement).contains(where: { $0.type == .adjustmentData }) else {
+            throw MediaError.invalid("The imported copy has been edited. Both Photos items are retained.")
+        }
+        let modification = replacement.modificationDate
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhotoCompressor-verify-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -43,8 +53,9 @@ extension PhotosService {
             let equal = try await Task.detached { try digest(temporary) == digest(archived) }.value
             guard equal else { throw MediaError.invalid("The replacement's content no longer matches its verified archive. No item was deleted.") }
         }
-        guard fetch(id)?.modificationDate == modification else { throw MediaError.invalid("The replacement changed while it was checked. Retry after finishing changes in Photos.") }
-        return modification
+        guard fetch(replacement.localIdentifier)?.modificationDate == modification else {
+            throw MediaError.invalid("The replacement changed while its resources were checked. Both Photos items are retained.")
+        }
     }
 
     private static func digest(_ url: URL) throws -> SHA256.Digest {

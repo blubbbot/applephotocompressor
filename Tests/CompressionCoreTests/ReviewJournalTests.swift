@@ -5,6 +5,8 @@ final class ReviewJournalTests: XCTestCase {
     private func readyRecord() -> OperationRecord {
         var record = OperationRecord(sourceID: "original", sourceName: "portrait.mov", backupPath: "/archive/original.mov", outputPath: "/archive/copy.mov", settings: CompressionSettings())
         record.originalBytes = 1_000; record.outputBytes = 500
+        record.originalFingerprint = FileFingerprint(bytes: 1000, sha256: String(repeating: "0", count: 64))
+        record.outputFingerprint = FileFingerprint(bytes: 500, sha256: String(repeating: "1", count: 64))
         record.replacementID = "replacement"; record.metadataVerified = true; record.stage = .readyToDelete
         return record
     }
@@ -50,10 +52,11 @@ final class ReviewJournalTests: XCTestCase {
     func testPreReviewJournalMigratesWithoutLosingDeletionSafeguards() throws {
         let data = try JSONEncoder().encode(readyRecord())
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        for key in ["reviewDecision", "sourceTextMetadata", "replacementModifiedAt", "restoredOriginalID", "restoredOriginalVerified"] { object.removeValue(forKey: key) }
+        for key in ["reviewDecision", "sourceTextMetadata", "replacementModifiedAt", "restoredOriginalID", "restoredOriginalVerified", "originalFingerprint", "outputFingerprint", "pairedVideoFingerprint", "importAttempted", "resumeDismissed"] { object.removeValue(forKey: key) }
         let legacy = try JSONDecoder().decode(OperationRecord.self, from: JSONSerialization.data(withJSONObject: object))
         XCTAssertTrue(legacy.needsReview)
-        XCTAssertTrue(legacy.isDeletionCandidate)
+        XCTAssertFalse(legacy.isDeletionCandidate, "Legacy archives have no historical checksums")
+        XCTAssertFalse(legacy.hasArchiveChecksums)
         XCTAssertNil(legacy.restoredOriginalID)
         XCTAssertNil(legacy.sourceTextMetadata)
     }

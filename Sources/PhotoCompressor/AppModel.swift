@@ -27,29 +27,30 @@ enum MediaMode: String, CaseIterable, Identifiable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    private let preferences: UserDefaults
     let sharing = SharedLibraryController()
     private var sharingChanges: AnyCancellable?
     @Published var videos: [LibraryVideo] = [] { didSet { requestLibraryUpdate(resort: true) } }
     @Published private(set) var visible: [LibraryVideo] = []
     @Published private(set) var isUpdatingList = false
     @Published var photoTypeFilter: PhotoTypeFilter = .all {
-        didSet { UserDefaults.standard.set(photoTypeFilter.rawValue, forKey: "photoTypeFilter"); requestLibraryUpdate() }
+        didSet { preferences.set(photoTypeFilter.rawValue, forKey: "photoTypeFilter"); requestLibraryUpdate() }
     }
     @Published var reviewPhotoTypeFilter: PhotoTypeFilter = .all {
-        didSet { UserDefaults.standard.set(reviewPhotoTypeFilter.rawValue, forKey: "reviewPhotoTypeFilter") }
+        didSet { preferences.set(reviewPhotoTypeFilter.rawValue, forKey: "reviewPhotoTypeFilter") }
     }
     @Published private(set) var mediaMode: MediaMode = .videos
     @Published var photoSettings = PhotoCompressionSettings() {
         didSet {
-            if let data = try? JSONEncoder().encode(photoSettings) { UserDefaults.standard.set(data, forKey: "photoCompressionSettings") }
+            if let data = try? JSONEncoder().encode(photoSettings) { preferences.set(data, forKey: "photoCompressionSettings") }
             updateListOrderNow()
         }
     }
     @Published var librarySharingFilter: LibrarySharingFilter = .all {
-        didSet { UserDefaults.standard.set(librarySharingFilter.rawValue, forKey: "librarySharingFilter"); requestLibraryUpdate() }
+        didSet { preferences.set(librarySharingFilter.rawValue, forKey: "librarySharingFilter"); requestLibraryUpdate() }
     }
     @Published var reviewSharingFilter: ReviewSharingFilter = .all {
-        didSet { UserDefaults.standard.set(reviewSharingFilter.rawValue, forKey: "reviewSharingFilter") }
+        didSet { preferences.set(reviewSharingFilter.rawValue, forKey: "reviewSharingFilter") }
     }
     @Published var selected = Set<String>() { didSet { refreshArchiveSpace() } }
     @Published var focusedID: String?
@@ -59,18 +60,18 @@ final class AppModel: ObservableObject {
     @Published var previewCompressed = false
     @Published var settings = CompressionSettings() {
         didSet {
-            if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: "compressionSettings") }
+            if let data = try? JSONEncoder().encode(settings) { preferences.set(data, forKey: "compressionSettings") }
             updateListOrderNow()
         }
     }
-    @Published var search = "" { didSet { UserDefaults.standard.set(search, forKey: mediaMode == .videos ? "librarySearch" : "photoLibrarySearch"); requestLibraryUpdate() } }
-    @Published var sort: VideoSort = .largest { didSet { UserDefaults.standard.set(sort.rawValue, forKey: mediaMode == .videos ? "librarySort" : "photoLibrarySort"); updateListOrderNow() } }
+    @Published var search = "" { didSet { preferences.set(search, forKey: mediaMode == .videos ? "librarySearch" : "photoLibrarySearch"); requestLibraryUpdate() } }
+    @Published var sort: VideoSort = .largest { didSet { preferences.set(sort.rawValue, forKey: mediaMode == .videos ? "librarySort" : "photoLibrarySort"); updateListOrderNow() } }
     @Published private var listOrder = StableListOrder<String>()
-    @Published var minimumSize: Int64 = 0 { didSet { UserDefaults.standard.set(minimumSize, forKey: mediaMode == .videos ? "libraryMinimumSize" : "photoLibraryMinimumSize"); requestLibraryUpdate() } }
-    @Published var hideUnsupported = true { didSet { UserDefaults.standard.set(hideUnsupported, forKey: "hideUnsupported"); requestLibraryUpdate() } }
-    @Published var hideProcessed = true { didSet { UserDefaults.standard.set(hideProcessed, forKey: "hideProcessed"); requestLibraryUpdate() } }
+    @Published var minimumSize: Int64 = 0 { didSet { preferences.set(minimumSize, forKey: mediaMode == .videos ? "libraryMinimumSize" : "photoLibraryMinimumSize"); requestLibraryUpdate() } }
+    @Published var hideUnsupported = true { didSet { preferences.set(hideUnsupported, forKey: "hideUnsupported"); requestLibraryUpdate() } }
+    @Published var hideProcessed = true { didSet { preferences.set(hideProcessed, forKey: "hideProcessed"); requestLibraryUpdate() } }
     @Published var replaceOriginals = false {
-        didSet { UserDefaults.standard.set(replaceOriginals, forKey: mediaMode == .videos ? "replaceOriginals" : "photoReplaceOriginals") }
+        didSet { preferences.set(replaceOriginals, forKey: mediaMode == .videos ? "replaceOriginals" : "photoReplaceOriginals") }
     }
     @Published var isLoading = false
     @Published var isBusy = false
@@ -102,12 +103,12 @@ final class AppModel: ObservableObject {
     @Published var archiveSpace: ArchiveSpaceSnapshot?
     @Published var workingSpace: ArchiveSpaceSnapshot?
     @Published var backupDirectory: URL {
-        didSet { UserDefaults.standard.set(backupDirectory.path, forKey: "backupDirectory"); refreshArchiveSpace() }
+        didSet { preferences.set(backupDirectory.path, forKey: "backupDirectory"); refreshArchiveSpace() }
     }
     let journal: OperationJournal?
-    private var cancellation = CancellationFlag()
+    var cancellation = CancellationFlag()
     private var previewTask: Task<Void, Never>?
-    private var batchTask: Task<Void, Never>?
+    var batchTask: Task<Void, Never>?
     private var inspectionTasks: [String: Task<Void, Never>] = [:]
     private var inspectionIDs: [String: UUID] = [:]
     private var archiveSpaceTask: Task<Void, Never>?
@@ -124,28 +125,29 @@ final class AppModel: ObservableObject {
     private var previewShouldResume = false
     private var previewMuted = false
 
-    init() {
-        backupDirectory = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "backupDirectory") ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/Photo Compressor Backups").path)
-        let journalURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PhotoCompressor/operations.json")
+    init(preferences: UserDefaults = .standard, journalURL: URL? = nil) {
+        self.preferences = preferences
+        backupDirectory = URL(fileURLWithPath: preferences.string(forKey: "backupDirectory") ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/Photo Compressor Backups").path)
+        let journalURL = journalURL ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PhotoCompressor/operations.json")
         do { journal = try OperationJournal(url: journalURL) }
         catch { journal = nil; notice = AppNotice(text: "The operation history could not be read. Compression is disabled to avoid losing recovery information: \(error.localizedDescription)") }
-        if let data = UserDefaults.standard.data(forKey: "compressionSettings"), let stored = try? JSONDecoder().decode(CompressionSettings.self, from: data) { settings = stored }
-        if let data = UserDefaults.standard.data(forKey: "photoCompressionSettings"), let stored = try? JSONDecoder().decode(PhotoCompressionSettings.self, from: data) { photoSettings = stored }
-        if !UserDefaults.standard.bool(forKey: "originalFrameRateDefaultV1") {
+        if let data = preferences.data(forKey: "compressionSettings"), let stored = try? JSONDecoder().decode(CompressionSettings.self, from: data) { settings = stored }
+        if let data = preferences.data(forKey: "photoCompressionSettings"), let stored = try? JSONDecoder().decode(PhotoCompressionSettings.self, from: data) { photoSettings = stored }
+        if !preferences.bool(forKey: "originalFrameRateDefaultV1") {
             settings.frameRate = .original
-            if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: "compressionSettings") }
-            UserDefaults.standard.set(true, forKey: "originalFrameRateDefaultV1")
+            if let data = try? JSONEncoder().encode(settings) { preferences.set(data, forKey: "compressionSettings") }
+            preferences.set(true, forKey: "originalFrameRateDefaultV1")
         }
-        search = UserDefaults.standard.string(forKey: "librarySearch") ?? ""
-        sort = UserDefaults.standard.string(forKey: "librarySort").flatMap(VideoSort.init(rawValue:)) ?? .largest
-        minimumSize = max(0, (UserDefaults.standard.object(forKey: "libraryMinimumSize") as? NSNumber)?.int64Value ?? 0)
-        hideUnsupported = UserDefaults.standard.object(forKey: "hideUnsupported") as? Bool ?? true
-        hideProcessed = UserDefaults.standard.object(forKey: "hideProcessed") as? Bool ?? true
-        replaceOriginals = UserDefaults.standard.bool(forKey: "replaceOriginals")
-        librarySharingFilter = UserDefaults.standard.string(forKey: "librarySharingFilter").flatMap(LibrarySharingFilter.init(rawValue:)) ?? .all
-        reviewSharingFilter = UserDefaults.standard.string(forKey: "reviewSharingFilter").flatMap(ReviewSharingFilter.init(rawValue:)) ?? .all
-        photoTypeFilter = UserDefaults.standard.string(forKey: "photoTypeFilter").flatMap(PhotoTypeFilter.init(rawValue:)) ?? .all
-        reviewPhotoTypeFilter = UserDefaults.standard.string(forKey: "reviewPhotoTypeFilter").flatMap(PhotoTypeFilter.init(rawValue:)) ?? .all
+        search = preferences.string(forKey: "librarySearch") ?? ""
+        sort = preferences.string(forKey: "librarySort").flatMap(VideoSort.init(rawValue:)) ?? .largest
+        minimumSize = max(0, (preferences.object(forKey: "libraryMinimumSize") as? NSNumber)?.int64Value ?? 0)
+        hideUnsupported = preferences.object(forKey: "hideUnsupported") as? Bool ?? true
+        hideProcessed = preferences.object(forKey: "hideProcessed") as? Bool ?? true
+        replaceOriginals = preferences.bool(forKey: "replaceOriginals")
+        librarySharingFilter = preferences.string(forKey: "librarySharingFilter").flatMap(LibrarySharingFilter.init(rawValue:)) ?? .all
+        reviewSharingFilter = preferences.string(forKey: "reviewSharingFilter").flatMap(ReviewSharingFilter.init(rawValue:)) ?? .all
+        photoTypeFilter = preferences.string(forKey: "photoTypeFilter").flatMap(PhotoTypeFilter.init(rawValue:)) ?? .all
+        reviewPhotoTypeFilter = preferences.string(forKey: "reviewPhotoTypeFilter").flatMap(PhotoTypeFilter.init(rawValue:)) ?? .all
         sharingChanges = sharing.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
             // objectWillChange precedes the new dictionary value.
@@ -233,10 +235,10 @@ final class AppModel: ObservableObject {
         libraryLoadTask?.cancel(); libraryLoadID = UUID(); isLoading = false; indexingSizes = false
         clearInspections(); player?.pause(); player = nil; selected.removeAll(); focusedID = nil; reviewFocusedID = nil
         mediaMode = mode; videos = []; visible = []
-        search = UserDefaults.standard.string(forKey: mode == .videos ? "librarySearch" : "photoLibrarySearch") ?? ""
-        minimumSize = max(0, (UserDefaults.standard.object(forKey: mode == .videos ? "libraryMinimumSize" : "photoLibraryMinimumSize") as? NSNumber)?.int64Value ?? 0)
-        sort = UserDefaults.standard.string(forKey: mode == .videos ? "librarySort" : "photoLibrarySort").flatMap(VideoSort.init(rawValue:)) ?? .largest
-        replaceOriginals = UserDefaults.standard.bool(forKey: mode == .videos ? "replaceOriginals" : "photoReplaceOriginals")
+        search = preferences.string(forKey: mode == .videos ? "librarySearch" : "photoLibrarySearch") ?? ""
+        minimumSize = max(0, (preferences.object(forKey: mode == .videos ? "libraryMinimumSize" : "photoLibraryMinimumSize") as? NSNumber)?.int64Value ?? 0)
+        sort = preferences.string(forKey: mode == .videos ? "librarySort" : "photoLibrarySort").flatMap(VideoSort.init(rawValue:)) ?? .largest
+        replaceOriginals = preferences.bool(forKey: mode == .videos ? "replaceOriginals" : "photoReplaceOriginals")
         if mode == .photos && sort == .longest { sort = .largest }
         if connected { connect(refreshSizes: false) }
         else { videos = []; demo = false }
@@ -382,7 +384,7 @@ final class AppModel: ObservableObject {
                     let sizes = try await LibrarySizeCache.shared.sizes(refresh: refreshSizes)
                     guard libraryLoadID == token, !Task.isCancelled else { return }
                     var measured = videos
-                    for index in measured.indices { if let size = sizes[measured[index].id] { measured[index].facts.bytes = size } }
+                    for index in measured.indices { if !measured[index].factsAreMeasured, let size = sizes[measured[index].id] { measured[index].facts.bytes = size } }
                     videos = measured
                 } catch {
                     guard libraryLoadID == token, !Task.isCancelled else { return }
@@ -511,146 +513,6 @@ final class AppModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { backupDirectory = url }
     }
 
-    func startBatch() {
-        guard !isBusy, !isInspecting, !demo, let journal else { return }
-        let batch = selectedVideos.filter { $0.unsupportedReason == nil }
-        guard !batch.isEmpty else { return }
-        let settings = self.settings, photoSettings = self.photoSettings
-        let replace = replaceOriginals && connected, archive = backupDirectory
-        isBusy = true; overallProgress = 0; cancellation = CancellationFlag(); batchSummary = nil
-        let flag = cancellation
-        batchTask = Task {
-            let awake = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "Compressing videos and preserving original archives")
-            defer {
-                ProcessInfo.processInfo.endActivity(awake)
-                isBusy = false; refreshArchiveSpace()
-            }
-            var summary = BatchSummary(total: batch.count)
-            var operationIDs = Set<UUID>()
-            var ready: [OperationRecord] = []
-            for (index, video) in batch.enumerated() {
-                if flag.isCancelled { break }
-                activity = "\(index + 1) of \(batch.count) · \(video.name)"
-                overallProgress = Double(index) / Double(batch.count)
-                if history.contains(where: { $0.sourceID == video.id && $0.replacementID != nil && $0.stage != .reverted }) {
-                    statuses[video.id] = RowStatus(text: "Existing copy · check Review")
-                    summary.skipped += 1; selected.remove(video.id); continue
-                }
-                var record = OperationRecord(sourceID: video.id, sourceName: video.name, backupPath: "", outputPath: "", settings: settings)
-                record.mediaKind = video.kind
-                if video.kind.isPhoto { record.sourceIsPanorama = video.isPanorama }
-                if video.kind.isPhoto { record.photoSettings = photoSettings }
-                operationIDs.insert(record.id)
-                let directory = archive.appendingPathComponent(record.id.uuidString)
-                let safeName = URL(fileURLWithPath: video.name).lastPathComponent
-                let originalURL = directory.appendingPathComponent(safeName)
-                let stem = String(URL(fileURLWithPath: safeName).deletingPathExtension().lastPathComponent.prefix(40))
-                let outputURL = directory.appendingPathComponent("\(stem) [\(record.id.uuidString)] compressed.\(video.kind.isPhoto ? "heic" : "mov")")
-                record.backupPath = originalURL.path; record.outputPath = outputURL.path
-                do {
-                    try flag.check()
-                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                    let capacity = try directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
-                    let required = (video.facts.bytes ?? 0) * 2 + estimatedBytes(video) + 512_000_000
-                    if let capacity, capacity < required { throw MediaError.invalid("The backup disk needs approximately \(DisplayFormat.bytes(required)) free for this video and its smaller copy.") }
-                    let original = video.asset.flatMap { PhotosService.fetch($0.localIdentifier) }
-                    record.sourceModifiedAt = original?.modificationDate
-                    if let original, let identity = SharedLibraryController.identity(original) {
-                        let observation = await sharing.inspect([identity])[original.localIdentifier]
-                        record.sourceSharedLibrary = observation?.state == .unknown ? (sharing.knownSharedOriginal(original.localIdentifier) ?? observation) : observation
-                    }
-                    try await journal.save(record)
-                    let metadata: ScriptMetadata?
-                    if let original {
-                        statuses[video.id] = RowStatus(text: "Reading library metadata…")
-                        metadata = try await PhotosScript.readMetadata(id: original.localIdentifier)
-                        record.sourceTextMetadata = metadata
-                        try await journal.save(record)
-                        statuses[video.id] = RowStatus(text: "Downloading and archiving…", fraction: 0)
-                        try await PhotosService.archive(original, to: originalURL) { progress in
-                            Task { @MainActor in self.statuses[video.id] = RowStatus(text: "Downloading and archiving…", fraction: progress) }
-                        }
-                    } else if let file = video.fileURL {
-                        metadata = nil; statuses[video.id] = RowStatus(text: "Archiving original…")
-                        try await Task.detached { try FileManager.default.copyItem(at: file, to: originalURL) }.value
-                    } else { throw MediaError.invalid("The original is no longer in the library. Refresh and try again.") }
-                    try flag.check()
-                    if video.kind.isPhoto {
-                        try await encodePhoto(video: video, original: original, source: originalURL, output: outputURL,
-                                              record: &record, settings: photoSettings, cancellation: flag)
-                    } else {
-                        let sourceInfo = try await VideoEncoder.inspect(originalURL)
-                        if let itemIndex = videos.firstIndex(where: { $0.id == video.id }) {
-                            videos[itemIndex].facts = sourceInfo.facts
-                            videos[itemIndex].factsAreMeasured = true
-                        }
-                        record.sourceFacts = sourceInfo.facts
-                        record.originalBytes = sourceInfo.facts.bytes; record.stage = .archived
-                        try await journal.save(record)
-                        statuses[video.id] = RowStatus(text: "Compressing…", fraction: 0)
-                        let updates = ProgressThrottle()
-                        let outputInfo = try await VideoEncoder.encode(source: originalURL, destination: outputURL, settings: settings, cancellation: flag) { progress in
-                            if updates.shouldUpdate(progress) { Task { @MainActor in
-                                self.statuses[video.id] = RowStatus(text: progress > 0.98 ? "Verifying every output frame…" : "Compressing…", fraction: progress)
-                                self.overallProgress = (Double(index) + progress * 0.85) / Double(batch.count)
-                            } }
-                        }
-                        record.outputBytes = outputInfo.facts.bytes
-                    }
-                    record.stage = .encoded
-                    try await journal.save(record)
-                    let before = record.originalBytes ?? 0, after = record.outputBytes ?? .max
-                    guard before > 0, after > 0, Double(before - after) / Double(before) >= (video.kind.isPhoto ? photoSettings.minimumSavings : settings.minimumSavings) else {
-                        record.stage = .keptOriginal; try await journal.save(record)
-                        statuses[video.id] = RowStatus(text: "Skipped · below minimum savings")
-                        summary.skipped += 1
-                        await reloadHistory(); continue
-                    }
-                    try flag.check()
-                    if let original, let metadata {
-                        statuses[video.id] = RowStatus(text: "Importing and restoring metadata…")
-                        let albums = PhotosService.regularAlbums(containing: original)
-                        record.replacementID = try await PhotosService.importVideo(outputURL, original: original, albums: albums,
-                            pairedVideo: record.outputIsLivePhoto ? record.pairedVideoPath.map { URL(fileURLWithPath: $0) } : nil)
-                        record.stage = .imported; try await journal.save(record)
-                        try PhotosService.verifyImport(record.replacementID!, original: original, albums: albums,
-                                                       expectedLive: video.kind.isPhoto ? record.outputIsLivePhoto : nil)
-                        if let photo = record.outputPhotoFacts, let imported = PhotosService.fetch(record.replacementID!),
-                           (imported.pixelWidth != photo.width || imported.pixelHeight != photo.height) {
-                            throw MediaError.invalid("The imported photo's dimensions were not verified. Original retained.")
-                        }
-                        try await PhotosScript.restoreMetadata(metadata, id: record.replacementID!)
-                        record.metadataVerified = true
-                        record.replacementModifiedAt = PhotosService.fetch(record.replacementID!)?.modificationDate
-                        record.stage = .readyToDelete
-                        try await journal.save(record)
-                        if replace { ready.append(record) }
-                    } else {
-                        record.stage = .keptOriginal; try await journal.save(record)
-                    }
-                    let saved = (record.originalBytes ?? 0) - (record.outputBytes ?? 0)
-                    summary.completed += 1; summary.savedBytes += max(0, saved)
-                    statuses[video.id] = RowStatus(text: "Copy ready · \(DisplayFormat.bytes(saved)) smaller")
-                    selected.remove(video.id)
-                } catch {
-                    if error is CancellationError { summary.interrupted += 1 } else { summary.failed += 1 }
-                    record.stage = .failed; record.error = error is CancellationError ? "Stopped; original retained." : error.localizedDescription
-                    try? await journal.save(record)
-                    statuses[video.id] = RowStatus(text: record.error ?? "Failed", failed: true)
-                }
-                await reloadHistory()
-            }
-            if !flag.isCancelled, !ready.isEmpty { await deleteReady(ready) }
-            overallProgress = 1
-            activity = flag.isCancelled ? "Stopped safely. Ready copies and originals are retained." : "Batch finished. Open Review to compare your copies."
-            await reloadHistory()
-            refreshSharing(force: true)
-            summary.originalsDeleted = history.filter { operationIDs.contains($0.id) && $0.stage == .originalDeleted }.count
-            summary.stopped = flag.isCancelled
-            batchSummary = summary
-        }
-    }
-
     func stop() { cancellation.cancel(); activity = "Stopping safely · the current iCloud download may finish first…" }
 
     func deletePending(_ ids: Set<UUID>) {
@@ -696,10 +558,9 @@ final class AppModel: ObservableObject {
                       record.kind.isPhoto || abs(original.duration - replacement.duration) < 0.25 else {
                     throw MediaError.invalid("An original or replacement changed or disappeared. Original retained.")
                 }
-                for (path, bytes) in record.archiveFiles {
-                    let size = try URL(fileURLWithPath: path).resourceValues(forKeys: [.fileSizeKey]).fileSize
-                    guard bytes != nil, size.map(Int64.init) == bytes else { throw MediaError.invalid("An archived resource is missing or changed. Original retained.") }
-                }
+                activity = "Verifying archive SHA-256 checksums…"
+                let flag = markReviewed ? CancellationFlag() : cancellation
+                try await Task.detached(priority: .utility) { try ArchiveIntegrity.verify(record, cancellation: flag) }.value
                 candidates.append((verified, original))
             } catch {
                 statuses[record.sourceID] = RowStatus(text: error.localizedDescription, failed: true)
@@ -707,6 +568,16 @@ final class AppModel: ObservableObject {
                 try? await journal.save(failed)
                 notice = AppNotice(text: error.localizedDescription)
             }
+        }
+        // Hashing large archives and replacement checks can take time. Refresh
+        // every candidate's Photos snapshot again immediately before deletion.
+        candidates = candidates.filter { record, asset in
+            let original = PhotosService.fetch(asset.localIdentifier)
+            let replacement = record.replacementID.flatMap { PhotosService.fetch($0) }
+            let unchanged = original != nil && replacement != nil && original?.modificationDate == record.sourceModifiedAt &&
+                (record.replacementModifiedAt == nil || replacement?.modificationDate == record.replacementModifiedAt)
+            if !unchanged { notice = AppNotice(text: "A Photos item changed during archive verification. Its original is retained; review and retry.") }
+            return unchanged
         }
         guard !candidates.isEmpty else { return }
         // Revalidation may await a resource download. A stop requested during
@@ -780,7 +651,7 @@ final class AppModel: ObservableObject {
     }
 }
 
-private final class ProgressThrottle: @unchecked Sendable {
+final class ProgressThrottle: @unchecked Sendable {
     private let lock = NSLock()
     private var lastUpdate = Date.distantPast
     func shouldUpdate(_ progress: Double) -> Bool {

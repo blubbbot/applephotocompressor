@@ -493,3 +493,39 @@ layout remain unverified live, following the prior instruction to proceed
 without computer-use testing. Universal-build and extracted-package checks
 validate signatures, privacy strings, icons, version, architectures, SQLite
 linkage, and the public download checksum.
+
+### 0.2.6 — archive integrity, Live Photo estimates, and recovery
+
+The full **74-test suite** passes on Intel. New tests cover streaming SHA-256
+fingerprints, known hash values, cancellation, missing/empty archives, same-size
+corruption in originals/outputs/motion, and durable checksum manifests. Missing,
+malformed, or inconsistent checksum manifests cannot grant original deletion;
+legacy records still decode and retain review/recovery information.
+
+Recovery tests run the actual app batch runner against generated local JPEG/HEIC
+fixtures, with isolated preferences and journals. They verify reuse of archived
+originals and completed outputs after restart, unchanged output modification
+dates, recovery without the local source file, preserved partial files, blocked
+corrupt outputs, atomic queuing of unstarted items, original saved settings,
+dismissal of unimported work, and safe rearchiving of legacy unimported work.
+Injected import/journal failures cover the window after Photos-style import
+success but before the returned ID is saved, lost completion callbacks, reuse by
+unique resource filename, and checkpoint failures preventing an import.
+
+Live Photo estimate tests check measured still/motion accounting, quality and
+resolution changes, unchanged retained motion, removal of only motion on
+conversion, existing HEIC estimates, and the provisional split before resource
+sizes are measured. Measured library sizes are retained during size indexing.
+
+No actual Photos library/database or app UI was opened. The new native quit
+confirmation, Photos-backed resume/import/resource matching, and History controls
+have not been exercised interactively. Photos behavior in failure tests is
+simulated; generated local-file recovery and the existing synthetic Live Photo
+pair validation are real. Legacy imported operations without historical hashes
+require manual recovery; the app does not manufacture trusted baseline hashes.
+
+The final focused run passes all **19 new regression tests** after the output
+capacity checks and legacy-review notices. Release builds pass for arm64 and
+x86_64. The 0.2.6 (build 16) universal app and extracted ZIP pass privacy-purpose,
+icon-resource, architecture, and strict code-signature verification. No release
+was published and no installed application or Photos library was opened.

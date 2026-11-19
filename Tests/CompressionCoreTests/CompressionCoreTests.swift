@@ -30,6 +30,8 @@ final class CompressionCoreTests: XCTestCase {
     func testDeletionIsIneligibleUntilEveryRequiredStageIsRecorded() {
         var record = OperationRecord(sourceID: "original", sourceName: "video.mov", backupPath: "/archive/video.mov", outputPath: "/archive/small.mov", settings: CompressionSettings())
         record.originalBytes = 1000; record.outputBytes = 500
+        record.originalFingerprint = FileFingerprint(bytes: 1000, sha256: String(repeating: "0", count: 64))
+        record.outputFingerprint = FileFingerprint(bytes: 500, sha256: String(repeating: "1", count: 64))
         record.replacementID = "replacement"; record.metadataVerified = true
         XCTAssertFalse(record.isDeletionCandidate)
         record.stage = .readyToDelete; XCTAssertTrue(record.isDeletionCandidate)

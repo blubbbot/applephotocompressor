@@ -68,6 +68,9 @@ final class PhotoEncoderTests: XCTestCase {
         record.outputPhotoFacts = PhotoFacts(width: 100, height: 100, bytes: 200, format: UTType.heic.identifier)
         record.pairedVideoPath = "/backup/motion.mov"; record.pairedVideoBytes = 400
         record.originalBytes = 1300; record.outputBytes = 600; record.replacementID = "copy"; record.metadataVerified = true; record.stage = .readyToDelete
+        record.originalFingerprint = FileFingerprint(bytes: 900, sha256: String(repeating: "0", count: 64))
+        record.outputFingerprint = FileFingerprint(bytes: 200, sha256: String(repeating: "1", count: 64))
+        record.pairedVideoFingerprint = FileFingerprint(bytes: 400, sha256: String(repeating: "2", count: 64))
         XCTAssertTrue(record.isDeletionCandidate)
         XCTAssertEqual(record.originalFileBytes, 900); XCTAssertEqual(record.outputFileBytes, 200)
         XCTAssertEqual(record.archiveFiles.count, 3)

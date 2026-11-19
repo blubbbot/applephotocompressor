@@ -54,6 +54,8 @@ final class SharedLibraryWorkflowTests: XCTestCase {
         var record = OperationRecord(sourceID: "original", sourceName: "shared.mov", backupPath: "/archive/original.mov", outputPath: "/archive/copy.mov", settings: CompressionSettings())
         record.sourceSharedLibrary = SharedLibraryObservation(state: .shared, detail: "Observed at compression")
         record.originalBytes = 1_000; record.outputBytes = 500
+        record.originalFingerprint = FileFingerprint(bytes: 1000, sha256: String(repeating: "0", count: 64))
+        record.outputFingerprint = FileFingerprint(bytes: 500, sha256: String(repeating: "1", count: 64))
         record.replacementID = "replacement"; record.metadataVerified = true; record.stage = .readyToDelete
         return record
     }

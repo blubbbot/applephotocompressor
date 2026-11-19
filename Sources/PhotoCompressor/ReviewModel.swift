@@ -55,7 +55,7 @@ extension AppModel {
                     guard record.isDeletionCandidate else { throw MediaError.invalid("This copy has not passed every import and metadata check. Its original is retained. Revert the copy or inspect its History entry.") }
                     await deleteReady([record], markReviewed: true)
                 } else {
-                    try verifyReviewFiles(record)
+                    try await verifyReviewFiles(record)
                     if record.isPhotosOperation {
                         guard let replacementID = record.replacementID, PhotosService.fetch(replacementID) != nil else {
                             throw MediaError.invalid("The compressed Photos copy is missing. The archive is retained; reconnect the library and check this item before accepting it.")
@@ -81,7 +81,7 @@ extension AppModel {
             defer { isBusy = false; isReviewing = false; refreshArchiveSpace() }
             var reverting = record
             do {
-                try verifyReviewFiles(reverting)
+                try await verifyReviewFiles(reverting)
                 if reverting.isPhotosOperation {
                     reverting.stage = .reverting; reverting.reviewDecision = nil; reverting.error = nil
                     try await journal.save(reverting)
@@ -115,15 +115,8 @@ extension AppModel {
         }
     }
 
-    private func verifyReviewFiles(_ record: OperationRecord) throws {
-        guard record.completePhotoResources else { throw MediaError.invalid("The photo archive manifest is incomplete. No Photos item was removed.") }
-        for (path, bytes) in record.archiveFiles {
-            guard !path.isEmpty, let bytes, bytes > 0,
-                  let size = try URL(fileURLWithPath: path).resourceValues(forKeys: [.fileSizeKey]).fileSize,
-                  Int64(size) == bytes else {
-                throw MediaError.invalid("An archived file is missing or changed. Reconnect its archive disk before continuing; no video has been deleted.")
-            }
-        }
+    private func verifyReviewFiles(_ record: OperationRecord) async throws {
+        try await Task.detached(priority: .utility) { try ArchiveIntegrity.verify(record) }.value
     }
 
     private func restoreAndRemoveCopy(_ record: inout OperationRecord) async throws {
@@ -147,7 +140,7 @@ extension AppModel {
         }
         if original == nil, record.restoredOriginalID == nil {
             // Recover a Photos import that succeeded before its ID was journaled.
-            if let recovered = try await PhotosService.restoredVideo(named: record.restorationFilename, photos: record.kind.isPhoto) {
+            if let recovered = try await PhotosService.asset(named: record.restorationFilename, photos: record.kind.isPhoto) {
                 original = recovered; record.restoredOriginalID = recovered.localIdentifier
                 try await journal.save(record)
             }

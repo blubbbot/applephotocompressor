@@ -128,6 +128,44 @@ previews work without connecting. Missing or changed archives block deletion.
 History also retains its batch deletion action. No manual reimport or searching
 for matching originals in Photos is needed for the normal review workflow.
 
+### Archive integrity and interrupted work
+
+New operations record streaming SHA-256 checksums for the full original, the
+validated compressed output, and Live Photo motion. Before deleting a Photos
+original or restoring an archived original, the app verifies both the expected
+sizes and checksums on a background task. Same-size corruption blocks the
+operation. Older history entries without checksums remain readable, but cannot
+establish historical file integrity: automatic deletion/restoration is blocked
+for those entries. Keep their originals and archives and recover them manually.
+An interrupted older operation that never imported a copy can download/archive
+its source again and continue with checksums.
+
+The entire selected batch is queued in the journal before processing starts.
+Open **History → Resume interrupted**, or use an item's **Resume / Retry with
+saved settings** action after a stop, failure, or restart. Connect the original
+Photos library before resuming library items. Recovery keeps each operation's
+identity, folder, and settings; it verifies and reuses completed downloads and
+outputs, and searches for an already imported copy before importing again.
+Missing or changed verified files block recovery. Unverified partial files are
+preserved under **Interrupted files** in the same operation folder before a new
+attempt. Resumed work retains originals in Photos for a separate Review decision.
+
+Starting the same selection with matching settings also resumes interrupted
+operations. If the settings differ, History directs you to finish the saved
+operation first. Unimported work can be dismissed from the resume queue to start
+again with different settings; all its files stay in place. Work with a known or
+possible Photos import must be recovered or reviewed first to avoid duplicates.
+Completed, skipped, accepted, and reverted work is excluded
+from the interrupted queue. Quitting during active work offers **Stop safely
+and quit** (or waits for a review action), and exits only after the operation
+has reached a saved checkpoint.
+
+Live Photo estimates apply quality and resolution to the still image separately
+from motion. Keeping motion adds its unchanged byte size; conversion to a still
+excludes it. Before archiving measures the resources, the estimate provisionally
+splits the original size equally between still and motion. These are rough size
+estimates; only measured savings determine whether a finished copy is imported.
+
 ### Savings and navigation
 
 Lists show savings as a prominent green badge, with both bytes and percentage.
@@ -357,7 +395,8 @@ or stops. This does not prevent manual sleep or closing a laptop's lid.
   membership (not manual album order) are restored and checked. Titles, captions, and keywords are
   restored through Photos automation and read back for verification.
 - A deletion candidate needs a confirmed imported copy, verified metadata, and
-  both archived files still present with their expected sizes. Changed source
+  both archived files still present with their expected sizes and SHA-256
+  checksums (new operations). Changed source
   assets are kept. Any download, encoding, validation, import, metadata, or
   journal failure retains the original.
 - Downloads/encoding run sequentially to limit temporary disk use. Photos may

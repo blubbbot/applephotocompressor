@@ -46,6 +46,13 @@ public struct OperationRecord: Codable, Identifiable {
     public var pairedVideoBytes: Int64?
     public var sourceSharedLibrary: SharedLibraryObservation?
     public var sourceIsPanorama: Bool?
+    public var originalFingerprint: FileFingerprint?
+    public var outputFingerprint: FileFingerprint?
+    public var pairedVideoFingerprint: FileFingerprint?
+    // Persisted before calling Photos so a retry can recover an import whose
+    // callback or journal write was interrupted, rather than import it twice.
+    public var importAttempted: Bool?
+    public var resumeDismissed: Bool?
     public var settings: CompressionSettings
 
     public init(sourceID: String, sourceName: String, backupPath: String, outputPath: String, settings: CompressionSettings) {
@@ -55,7 +62,7 @@ public struct OperationRecord: Codable, Identifiable {
     }
 
     public var isDeletionCandidate: Bool {
-        stage == .readyToDelete && reviewDecision == nil && completePhotoResources && metadataVerified && replacementID?.isEmpty == false && replacementID != sourceID &&
+        stage == .readyToDelete && reviewDecision == nil && completePhotoResources && hasArchiveChecksums && metadataVerified && replacementID?.isEmpty == false && replacementID != sourceID &&
         !(backupPath.isEmpty) && (originalBytes ?? 0) > 0 && (outputBytes ?? 0) > 0 &&
         (outputBytes ?? .max) < (originalBytes ?? 0)
     }
@@ -84,6 +91,11 @@ public struct OperationRecord: Codable, Identifiable {
         return files
     }
 
+    public var hasArchiveChecksums: Bool {
+        originalFingerprint?.matches(bytes: originalFileBytes) == true && outputFingerprint?.matches(bytes: outputFileBytes) == true &&
+        (kind != .livePhoto || (pairedVideoPath?.isEmpty == false && pairedVideoFingerprint?.matches(bytes: pairedVideoBytes) == true))
+    }
+
     public var hasReviewableCopy: Bool {
         guard (outputBytes ?? 0) > 0, !outputPath.isEmpty else { return false }
         if replacementID != nil { return true }
@@ -92,6 +104,14 @@ public struct OperationRecord: Codable, Identifiable {
     }
 
     public var needsReview: Bool { hasReviewableCopy && reviewDecision == nil && stage != .reverted }
+
+    public var canResume: Bool {
+        resumeDismissed != true && reviewDecision == nil && [.preparing, .archived, .encoded, .imported, .failed].contains(stage)
+    }
+
+    public var canDismissResume: Bool {
+        canResume && replacementID == nil && importAttempted != true && (outputBytes == nil || originalFingerprint != nil)
+    }
 
     // A stable resource name lets an interrupted archive restoration be recovered
     // without importing another full original after a restart.
@@ -117,9 +137,16 @@ public actor OperationJournal {
     public func all() -> [OperationRecord] { records.sorted { $0.startedAt > $1.startedAt } }
 
     public func save(_ record: OperationRecord) throws {
+        try save([record])
+    }
+
+    // Queue the entire batch atomically, including items not yet started.
+    public func save(_ updates: [OperationRecord]) throws {
         var next = records
-        if let index = next.firstIndex(where: { $0.id == record.id }) { next[index] = record }
-        else { next.append(record) }
+        for record in updates {
+            if let index = next.firstIndex(where: { $0.id == record.id }) { next[index] = record }
+            else { next.append(record) }
+        }
         let data = try JSONEncoder().encode(next)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: [.atomic])

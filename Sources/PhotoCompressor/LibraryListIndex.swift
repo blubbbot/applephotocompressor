@@ -70,11 +70,15 @@ enum LibraryListIndex {
 
     static func estimatedBytes(_ item: LibraryVideo, settings: CompressionSettings, photoSettings: PhotoCompressionSettings) -> Int64 {
         guard item.kind.isPhoto else { return CompressionPlan(facts: item.facts, settings: settings).estimatedBytes }
-        let size = item.facts.bytes ?? Int64(item.facts.width * item.facts.height / 3)
+        let size = max(1, item.facts.bytes ?? Int64(item.facts.width * item.facts.height / 3))
+        // Until the pair is archived, use a provisional equal still/motion
+        // split. Resolution and quality affect only the still, never the movie.
+        let motion = item.kind == .livePhoto ? min(size - 1, max(0, item.pairedVideoBytes ?? size / 2)) : 0
+        let still = size - motion
         let dimensions = PhotoEncoder.dimensions(width: item.facts.width, height: item.facts.height, resolution: photoSettings.resolution)
         let ratio = Double(dimensions.0 * dimensions.1) / Double(max(1, item.facts.width * item.facts.height))
         let baseFraction = item.photoFormat == "public.heic" ? 0.9 : 0.65
-        let fraction = item.kind == .livePhoto && !photoSettings.convertLiveToStill ? 0.9 : min(0.98, max(0.1, baseFraction * photoSettings.quality / 0.8 * ratio))
-        return Int64(Double(size) * fraction)
+        let fraction = min(0.98, max(0.1, baseFraction * photoSettings.quality / 0.8 * ratio))
+        return max(1, Int64(Double(still) * fraction)) + (photoSettings.convertLiveToStill ? 0 : motion)
     }
 }

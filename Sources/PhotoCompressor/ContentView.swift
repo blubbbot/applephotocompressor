@@ -691,6 +691,21 @@ struct HistoryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack { VStack(alignment: .leading, spacing: 5) { Text("Compression history").font(.title2.weight(.semibold)); Text("Every original, smaller copy, and replacement is recorded here.").foregroundStyle(.secondary) }; Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+            if !model.resumableRecords.isEmpty {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(model.resumableRecords.count) interrupted or queued items").font(.headline)
+                        Text("Resume uses saved settings and verified files. Originals stay in Photos for review.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if !model.connected && model.resumableRecords.contains(where: \.isPhotosOperation) {
+                            Text("Connect Photos to resume library items.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Resume interrupted") { model.resumeInterrupted() }
+                        .disabled(!model.resumableRecords.allSatisfy { model.canResume($0) })
+                }.padding(12).background(accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            }
             if !model.pending.isEmpty {
                 SharedLibraryNotice().environmentObject(model)
                 HStack {
@@ -720,7 +735,20 @@ struct HistoryView: View {
                                 }
                                 HStack { Text(record.startedAt.formatted()); Spacer(); if let before = record.originalBytes, let after = record.outputBytes { Text("\(DisplayFormat.bytes(before)) → \(DisplayFormat.bytes(after))") } }.font(.caption).foregroundStyle(.secondary)
                                 if let error = record.error { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
+                                if record.hasReviewableCopy && !record.hasArchiveChecksums {
+                                    Text("Archive checksums unavailable. Automatic deletion and restoration are blocked for this older or incomplete operation.")
+                                        .font(.caption).foregroundStyle(.orange)
+                                }
+                                if record.resumeDismissed == true { Text("Removed from the resume queue; all files are retained.").font(.caption).foregroundStyle(.secondary) }
                                 HStack {
+                                    if record.canResume {
+                                        Button(record.stage == .failed ? "Retry with saved settings" : "Resume") { model.resumeInterrupted(record) }
+                                            .disabled(!model.canResume(record))
+                                        if record.canDismissResume {
+                                            Button("Dismiss interrupted work") { model.dismissInterrupted(record) }.disabled(model.isBusy)
+                                                .help("Remove from the resume queue and keep all files. Select the source again to start with different settings.")
+                                        }
+                                    }
                                     if record.hasReviewableCopy { Button("Review side by side") { model.openReview(record); dismiss() } }
                                     Button("Show archived files") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.backupPath)]) }
                                     if FileManager.default.fileExists(atPath: record.outputPath) { Button("Open compressed copy") { NSWorkspace.shared.open(URL(fileURLWithPath: record.outputPath)) } }
